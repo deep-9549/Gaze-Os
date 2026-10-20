@@ -153,3 +153,21 @@ def test_onboarding_blink_tuning(qtbot) -> None:
     assert onb.threshold is not None and 200 < onb.threshold < 520
     onb._finish()
     assert done == [onb.threshold]
+
+
+def test_overlay_painting_does_not_leak_none(qtbot, geometry) -> None:
+    """Guards the PySide6 6.12.0 bug that over-released None in QPainter setters and
+    crashed the 60 Hz overlay after a few minutes on Python 3.11."""
+    import sys
+
+    from gazeos.ui.overlay import Overlay
+
+    ov = Overlay()
+    qtbot.addWidget(ov)
+    ov.resize(400, 300)
+    ov.set_output(EngineOutput(cursor=(100, 100), state=ControlState.DWELLING, status=TrackingStatus.TRACKING,
+                               dwell_progress=0.4, sigma_px=30.0))
+    before = sys.getrefcount(None)
+    for _ in range(300):
+        ov.grab()
+    assert sys.getrefcount(None) - before > -100

@@ -130,7 +130,9 @@ class MainThreadBridge(QObject):
     """Runs callables on the GUI thread; the engine calls targets from its own thread."""
 
     call = Signal(object)
-    frame = Signal(object, object, object)
+    # One packet object per frame: PySide6 can corrupt None's refcount when a bare
+    # None is passed through a multi-argument Signal(object, ...).
+    frame = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()

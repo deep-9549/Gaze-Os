@@ -23,7 +23,9 @@ dependencies = [
 app = [
     "mediapipe>=0.10.14",
     "onnxruntime>=1.17",
-    "PySide6>=6.6",
+    # 6.12.0 over-releases None on QPainter setters, which crashes the 60 Hz overlay
+    # within minutes on Python 3.11 ("none_dealloc"). Re-test before lifting the cap.
+    "PySide6>=6.6,<6.12",
     "pynput>=1.7",
     "pyttsx3>=2.90",
     "uiautomation>=2.0; sys_platform == 'win32'",
@@ -49,6 +51,9 @@ research = [
     "pandas>=2.1",
     "matplotlib>=3.8",
     "statsmodels>=0.14",
+]
+docs = [
+    "mkdocs-material>=9.5",
 ]
 dev = [
     "pytest>=8.0",

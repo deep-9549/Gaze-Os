@@ -19,6 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--profile", help="profile name (default: last used)")
     p.add_argument("--home", help="data folder (default: per-user app data; or $GAZEOS_HOME)")
     p.add_argument("--camera", type=int, help="camera index (see --list-cameras)")
+    p.add_argument("--gaze-model", help="gaze ONNX model to use (default: settings gaze_model)")
     p.add_argument("--simulate", action="store_true", help="drive the pipeline from the mouse, no camera")
     p.add_argument("--dry-run", action="store_true", help="never inject mouse or keyboard input")
     p.add_argument("--list-cameras", action="store_true", help="list cameras and exit")

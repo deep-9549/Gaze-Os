@@ -109,6 +109,8 @@ class GazeOSApp(QObject):
         self.profile: Profile = self.store.get_or_create(name)
         self.store.last_used = name
         self.settings: Settings = self.profile.load_settings()
+        if getattr(args, "gaze_model", None):
+            self.settings.gaze_model = args.gaze_model  # type: ignore[attr-defined]
         if getattr(args, "camera", None) is not None:
             self.settings.camera.device_index = args.camera  # type: ignore[attr-defined]
         self.simulate = bool(getattr(args, "simulate", False))
@@ -270,10 +272,11 @@ class GazeOSApp(QObject):
             cal.add_frame(pf.result.t_capture, pf.observation, pf.engine_input.eyes_closed)
 
     def _frame_from_thread(self, pf: ProcessedFrame, out: EngineOutput | None, image: np.ndarray) -> None:
-        self.bridge.frame.emit(pf, out, image)
+        self.bridge.frame.emit((pf, out, image))
 
-    @Slot(object, object, object)
-    def _on_frame(self, pf: ProcessedFrame, out: EngineOutput | None, image: np.ndarray) -> None:
+    @Slot(object)
+    def _on_frame(self, packet: tuple[ProcessedFrame, EngineOutput | None, np.ndarray]) -> None:
+        pf, out, image = packet
         if out is not None:
             self.overlay.set_output(out)
             self.action_bar.set_action(out.action)
