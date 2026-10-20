@@ -1,0 +1,32 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+# Large or private artifacts: datasets, checkpoints and recordings never go in Git.
+data/
+datasets/
+checkpoints/
+runs/
+outputs/
+wandb/
+recordings/
+*.ckpt
+*.pt
+*.pth
+*.h5
+*.hdf5
+# Model files are tracked with Git LFS (see .gitattributes); the MediaPipe task file is downloaded.
+models/face_landmarker.task
+
+# Generated locally; real results are written up in the report.
+results/
+figures/
+models/smoke_*
