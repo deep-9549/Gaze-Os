@@ -6,7 +6,13 @@ import pytest
 from gazeos.calibration.protocol import GazeObservation
 from gazeos.control.dwell import DwellClicker
 from gazeos.control.engine import Action, ControlEngine, EngineInput
-from gazeos.control.filters import KalmanFilter2D, MovingAverage, NoFilter, OneEuroFilter, make_filter
+from gazeos.control.filters import (
+    KalmanFilter2D,
+    MovingAverage,
+    NoFilter,
+    OneEuroFilter,
+    make_filter,
+)
 from gazeos.control.fixation import EyeEvent, FixationDetector
 from gazeos.control.mapping import magnetic_edges
 from gazeos.control.snapping import TargetSnapper

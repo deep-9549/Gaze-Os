@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "Hands-free computer control with an ordinary webcam: gaze pointing, blink and gesture clicks, and predictive gaze typing."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Apache-2.0" }
 authors = [{ name = "Deep" }]
 dependencies = [
     "numpy>=1.26",
@@ -83,7 +82,10 @@ ignore = ["E501", "B008"]
 [tool.mypy]
 python_version = "3.11"
 ignore_missing_imports = true
-warn_unused_ignores = true
+plugins = ["pydantic.mypy"]
+# Backends carry platform-specific ignores (windll, Quartz) that look unused on other OSes.
+warn_unused_ignores = false
+disable_error_code = ["unused-ignore"]
 
 [[tool.mypy.overrides]]
 # Section 22: strict typing on the core logic of the shipped app.
@@ -98,6 +100,7 @@ module = [
     "gazeos.settings",
 ]
 strict = true
+warn_unused_ignores = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

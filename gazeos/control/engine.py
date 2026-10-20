@@ -13,7 +13,7 @@ import math
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 import numpy as np
 from numpy.typing import NDArray
@@ -40,7 +40,7 @@ log = logging.getLogger(__name__)
 FloatArray = NDArray[np.float64]
 
 
-class Action(str, Enum):
+class Action(StrEnum):
     LEFT = "left"
     RIGHT = "right"
     DOUBLE = "double"
@@ -93,7 +93,7 @@ class ControlEngine:
         self.drift = DriftCorrector()
         self.history = GazeHistory()
         self.px_per_deg = geometry.deg_to_px(1.0)
-        self.filter: PointFilter = make_filter(settings.filter)
+        self.filter: PointFilter = make_filter(settings.filter, self.px_per_deg)
         self.fixation = FixationDetector(
             self.px_per_deg,
             settings.fixation.saccade_velocity_deg_s,
@@ -291,7 +291,7 @@ class ControlEngine:
         d_deg = np.degrees(head - anchor_head)
         gain = self.s.system.head_fine_tune_gain_px_per_deg
         # Pitch up moves the cursor up; yaw moves it horizontally (camera +x is screen -x).
-        return anchor_pt + np.array([d_deg[1] * gain, -d_deg[0] * gain])
+        return np.asarray(anchor_pt + np.array([d_deg[1] * gain, -d_deg[0] * gain]), dtype=np.float64)
 
     def _corner_event(self, t: float, cursor: FloatArray) -> str | None:
         size = self.s.system.corner_size_px

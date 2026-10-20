@@ -18,7 +18,12 @@ from gazeos.vision.geometry import (
     vector_to_pitchyaw,
 )
 from gazeos.vision.head_pose import HeadPoseEstimator, project_points
-from gazeos.vision.normalization import NORM_DISTANCE_MM, normalize, normalization_rotation, warp_matrix
+from gazeos.vision.normalization import (
+    NORM_DISTANCE_MM,
+    normalization_rotation,
+    normalize,
+    warp_matrix,
+)
 from gazeos.vision.quality import QualityGate
 
 angles = st.floats(min_value=-1.2, max_value=1.2, allow_nan=False)

@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 
 def set_seed(seed: int) -> None:
     random.seed(seed)
-    np.random.seed(seed)
+    np.random.seed(seed)  # noqa: NPY002 - seeds third-party code using the legacy global RNG
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 

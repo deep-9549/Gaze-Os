@@ -95,7 +95,7 @@ def test_session_typing_and_choice(predictor: Predictor) -> None:
     sess.press(space)
     sess.backspace()
     assert sess.text == "water "
-    assert 0 < keystroke_savings_rate(sess.keystrokes, len("water")) or sess.keystrokes >= 4
+    assert keystroke_savings_rate(sess.keystrokes, len("water")) > 0 or sess.keystrokes >= 4
 
 
 def test_ksr_with_prediction_beats_letters(predictor: Predictor) -> None:

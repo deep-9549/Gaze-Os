@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,7 @@ from gazeos.calibration.geometry import ScreenGeometry
 from gazeos.calibration.implicit import ImplicitRecalibrator
 from gazeos.calibration.personalization import Personalizer, load_personalizer, make_personalizer
 from gazeos.calibration.protocol import CalibrationSample
+from gazeos.capture.camera import CaptureThread, OpenCVSource
 from gazeos.control.engine import Action, ControlEngine, EngineOutput
 from gazeos.control.targets import TargetRegistry
 from gazeos.os_backends.base import InputBackend, get_backend
@@ -99,7 +101,8 @@ class GazeOSApp(QObject):
     def __init__(self, args: object) -> None:
         super().__init__()
         self.args = args
-        self.qapp = QApplication.instance() or QApplication(sys.argv)
+        app = QApplication.instance()
+        self.qapp: QApplication = app if isinstance(app, QApplication) else QApplication(sys.argv)
         self.qapp.setQuitOnLastWindowClosed(False)
         self.store = ProfileStore(getattr(args, "home", None))
         name = getattr(args, "profile", None) or self.store.last_used or "default"
@@ -196,7 +199,7 @@ class GazeOSApp(QObject):
             ("Quit GazeOS", "menu_quit", self.quit),
         ], th)
         self.shortcuts = ButtonPanel("Shortcuts", [
-            (label, f"sc_{name}", lambda n=name: self.engine.run_shortcut(n))
+            (label, f"sc_{name}", self._shortcut_runner(name))
             for label, name in (("Copy", "copy"), ("Paste", "paste"), ("Cut", "cut"), ("Undo", "undo"),
                                 ("Select all", "select_all"), ("Switch window", "switch_window"),
                                 ("Close window", "close_window"), ("Start menu", "start_menu"),
@@ -226,24 +229,23 @@ class GazeOSApp(QObject):
 
     def _start_threads(self) -> None:
         if self.simulate:
-            self.capture = SimulatedCapture(self.geometry, self.intrinsics)
+            self.capture: SimulatedCapture | CaptureThread = SimulatedCapture(self.geometry, self.intrinsics)
             self._sim_timer = QTimer(self)
             self._sim_timer.timeout.connect(self._sim_mouse)
             self._sim_timer.start(15)
-            self.thread = _SimThread(self.capture, self.processor, self.engine, self._frame_from_thread,
+            self.worker: ProcessingThread = _SimThread(self.capture, self.processor, self.engine, self._frame_from_thread,
                                      self._observation_hook)
         else:
-            from gazeos.capture.camera import CaptureThread, OpenCVSource
-
             c = self.settings.camera
             source = OpenCVSource(c.device_index, c.width, c.height, c.fps)
-            self.capture = CaptureThread(source)
-            self.capture.start()
+            capture = CaptureThread(source)
+            capture.start()
+            self.capture = capture
             if c.lock_exposure:
                 QTimer.singleShot(3000, source.lock_exposure)  # after auto exposure settles
-            self.thread = ProcessingThread(self.capture, self.processor, self.engine, self._frame_from_thread,
+            self.worker = ProcessingThread(self.capture, self.processor, self.engine, self._frame_from_thread,
                                            self._observation_hook)
-        self.thread.start()
+        self.worker.start()
 
     def _install_hotkeys(self) -> None:
         """Ctrl+Alt+G emergency stop always works (PRD 18.3); Ctrl+Alt+P pauses."""
@@ -285,7 +287,7 @@ class GazeOSApp(QObject):
             if self.logger is not None:
                 self.logger.log_frame(pf.result.t_capture, out.cursor, out.state.value, out.status.value,
                                       pf.result.timings_ms, out.sigma_px)
-        self.debug.fps = getattr(self.thread, "fps", 0.0)
+        self.debug.fps = getattr(self.worker, "fps", 0.0)
         self.debug.update_frame(pf, image)
         if self.onboarding is not None:
             self.onboarding.update_frame(pf, image, self.processor.blinks.last_closure_ms)
@@ -307,15 +309,15 @@ class GazeOSApp(QObject):
 
     # -- actions -----------------------------------------------------------------
     def _set_action(self, action: Action) -> None:
-        with self.thread.with_engine():
+        with self.worker.with_engine():
             self.engine.set_action(action)
 
     def toggle_pause(self) -> None:
-        with self.thread.with_engine():
+        with self.worker.with_engine():
             self.engine.toggle_pause("user")
 
     def emergency_stop(self) -> None:
-        with self.thread.with_engine():
+        with self.worker.with_engine():
             self.engine.emergency_stop()
         self.overlay.show_toast("Emergency stop: all input stopped. Ctrl+Alt+P resumes.", 6)
 
@@ -334,6 +336,12 @@ class GazeOSApp(QObject):
 
         self.bridge.call.emit(ask)
         return False
+
+    def _shortcut_runner(self, name: str) -> Callable[[], None]:
+        def run() -> None:
+            self.engine.run_shortcut(name)
+
+        return run
 
     def _show_menu(self) -> None:
         self.menu.show()
@@ -378,9 +386,16 @@ class GazeOSApp(QObject):
 
     def _save_settings(self, settings: Settings) -> None:
         self.profile.save_settings(settings)
+        if settings.system.start_with_os != self.settings.system.start_with_os:
+            try:
+                from gazeos.autostart import set_enabled
+
+                set_enabled(settings.system.start_with_os)
+            except OSError as exc:
+                log.warning("could not change start-with-OS: %s", exc)
         self.overlay.show_toast("Settings saved. Restart GazeOS to apply camera and model changes.", 4)
         self.settings = settings
-        with self.thread.with_engine():
+        with self.worker.with_engine():
             self.engine.s = settings
 
     def _show_privacy(self) -> None:
@@ -406,8 +421,8 @@ class GazeOSApp(QObject):
         self.onboarding = None
 
     def start_calibration(self, quick: bool = False) -> None:
-        with self.thread.with_engine():
-            self.thread.engine_enabled = False  # no clicks while calibrating
+        with self.worker.with_engine():
+            self.worker.engine_enabled = False  # no clicks while calibrating
         p = self.personalizer if quick else make_personalizer(self.settings.calibration.method, self.geometry)
         self.calibration = CalibrationWindow(
             self.geometry, p, self.settings.calibration, self._calibration_done, self.settings.theme,
@@ -420,8 +435,8 @@ class GazeOSApp(QObject):
     def _calibration_done(self, outcome: CalibrationOutcome | None) -> None:
         self.sync.untrack("calibration")
         self.calibration = None
-        with self.thread.with_engine():
-            self.thread.engine_enabled = True
+        with self.worker.with_engine():
+            self.worker.engine_enabled = True
             if outcome is not None:
                 if outcome.quick_offset is not None:
                     self.engine.drift.offset = self.engine.drift.offset + outcome.quick_offset
@@ -460,11 +475,12 @@ class GazeOSApp(QObject):
         pos = QCursor.pos()
         screen = QGuiApplication.primaryScreen()
         r = screen.devicePixelRatio() if screen else 1.0
-        self.capture.mouse = (pos.x() * r, pos.y() * r)  # type: ignore[attr-defined]
+        if isinstance(self.capture, SimulatedCapture):
+            self.capture.mouse = (pos.x() * r, pos.y() * r)
 
     # -- lifecycle -----------------------------------------------------------------
     def quit(self) -> None:
-        self.thread.stop()
+        self.worker.stop()
         self.capture.stop()
         if self.logger is not None:
             self.logger.close()

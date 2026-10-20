@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 import numpy as np
 from numpy.typing import NDArray
@@ -11,7 +11,7 @@ from numpy.typing import NDArray
 FloatArray = NDArray[np.float64]
 
 
-class ControlState(str, Enum):
+class ControlState(StrEnum):
     """Dwell / control state reported on every frame (PRD 12.7)."""
 
     IDLE = "idle"
@@ -21,7 +21,7 @@ class ControlState(str, Enum):
     PAUSED = "paused"
 
 
-class TrackingStatus(str, Enum):
+class TrackingStatus(StrEnum):
     """Status chip values (PRD 7.4). Always shown with a text label, never colour alone."""
 
     TRACKING = "Tracking"

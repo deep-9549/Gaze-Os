@@ -91,7 +91,8 @@ def _send(*inputs: INPUT) -> None:
     arr = (INPUT * len(inputs))(*inputs)
     sent = user32.SendInput(len(inputs), arr, ctypes.sizeof(INPUT))
     if sent != len(inputs):
-        log.debug("SendInput sent %d of %d (error %d)", sent, len(inputs), ctypes.get_last_error())
+        err = ctypes.get_last_error()  # type: ignore[attr-defined]
+        log.debug("SendInput sent %d of %d (error %d)", sent, len(inputs), err)
 
 
 def _mouse(flags: int, dx: int = 0, dy: int = 0, data: int = 0) -> INPUT:

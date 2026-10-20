@@ -19,7 +19,15 @@ import torch
 from training.export_onnx import load_checkpoint
 from training.losses.gaze import distillation_loss, total_loss
 from training.models.gazenet import GazeNetGOS, bin_centers_deg
-from training.train import _plain, evaluate, git_commit, lr_lambda, make_loaders, param_groups, set_seed
+from training.train import (
+    _plain,
+    evaluate,
+    git_commit,
+    lr_lambda,
+    make_loaders,
+    param_groups,
+    set_seed,
+)
 
 log = logging.getLogger(__name__)
 

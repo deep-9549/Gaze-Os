@@ -18,11 +18,11 @@ from gazeos.vision.head_pose import CameraIntrinsics, project_points
 
 def _pixmap(img: NDArray[np.uint8], width: int | None = None) -> QPixmap:
     if img.ndim == 2:
-        img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+        img = np.asarray(cv2.cvtColor(img, cv2.COLOR_GRAY2RGB), dtype=np.uint8)
     img = np.ascontiguousarray(img)
     if width is not None and img.shape[1] != width:
         h = int(img.shape[0] * width / img.shape[1])
-        img = cv2.resize(img, (width, h), interpolation=cv2.INTER_NEAREST)
+        img = np.asarray(cv2.resize(img, (width, h), interpolation=cv2.INTER_NEAREST), dtype=np.uint8)
     h, w = img.shape[:2]
     q = QImage(img.data, w, h, 3 * w, QImage.Format.Format_RGB888)
     return QPixmap.fromImage(q.copy())

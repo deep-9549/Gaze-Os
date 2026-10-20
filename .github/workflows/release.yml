@@ -1,0 +1,30 @@
+name: Release
+
+# Builds the Windows installer from a tagged commit and publishes a checksum (PRD 21.2).
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[app]" pyinstaller
+      - run: python -m tools.download_models
+      - run: pyinstaller packaging/gazeos.spec --noconfirm
+      - name: Checksum
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/GazeOS/* -DestinationPath GazeOS-${{ github.ref_name }}-windows.zip
+          (Get-FileHash GazeOS-${{ github.ref_name }}-windows.zip -Algorithm SHA256).Hash | Out-File SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            GazeOS-${{ github.ref_name }}-windows.zip
+            SHA256SUMS.txt

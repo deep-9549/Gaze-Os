@@ -8,6 +8,7 @@ a udev rule for /dev/uinput).
 from __future__ import annotations
 
 import time
+from typing import Any
 
 from evdev import AbsInfo, UInput, ecodes  # type: ignore[import-not-found]
 
@@ -32,7 +33,7 @@ _PUNCT = {
 class UInputBackend:
     def __init__(self, width: int = 1920, height: int = 1080) -> None:
         self.width, self.height = width, height
-        caps = {
+        caps: dict[int, Any] = {
             ecodes.EV_KEY: list(_BUTTONS.values()) + list(_KEYS.values())
             + [getattr(ecodes, f"KEY_{c}") for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"]
             + [getattr(ecodes, n) for n, _ in _PUNCT.values()],

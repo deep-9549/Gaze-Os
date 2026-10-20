@@ -38,6 +38,17 @@ class SessionMeta:
     condition: dict[str, str] = field(default_factory=dict)
 
 
+def condition_code(condition: dict[str, str]) -> int:
+    """Bitfield used by the E9 breakdown: bit 0 dim light, bit 1 glasses, bits 2-3 distance (50/65/80 cm)."""
+    code = 0
+    if condition.get("lighting") == "dim":
+        code |= 1
+    if condition.get("glasses") == "yes":
+        code |= 2
+    code |= {"50": 0, "65": 1, "80": 2}.get(str(condition.get("distance_cm", "65")), 1) << 2
+    return code
+
+
 class SessionRecorder:
     def __init__(self, path: str | Path, meta: SessionMeta, keep_crops: bool = False) -> None:
         self.path = Path(path)
@@ -52,6 +63,8 @@ class SessionRecorder:
         self._faces: list[NDArray[np.uint8]] = []
         self._reyes: list[NDArray[np.uint8]] = []
         self._leyes: list[NDArray[np.uint8]] = []
+        self._gaze_norm: list[NDArray[np.float64]] = []
+        self._head_norm: list[NDArray[np.float64]] = []
 
     def add(
         self,
@@ -59,7 +72,9 @@ class SessionRecorder:
         lm: LandmarkResult,
         target_px: tuple[float, float] | None = None,
         norm: NormalizationResult | None = None,
+        gaze_norm: NDArray[np.float64] | None = None,
     ) -> None:
+        """`gaze_norm`: label in the normalized frame (pitch, yaw), for GazeOS-Webcam training data."""
         self._t.append(t)
         ok = lm.landmarks_px is not None
         self._valid.append(ok)
@@ -68,6 +83,9 @@ class SessionRecorder:
         self._tf.append(lm.transform if lm.transform is not None else np.eye(4))
         self._targets.append(target_px if target_px is not None else (np.nan, np.nan))
         if self.keep_crops:
+            nan2 = np.full(2, np.nan)
+            self._gaze_norm.append(gaze_norm if gaze_norm is not None else nan2)
+            self._head_norm.append(np.asarray(norm.head_pyr) if norm is not None else np.full(3, np.nan))
             if norm is not None:
                 self._faces.append(norm.face)
                 self._reyes.append(norm.right_eye)
@@ -95,8 +113,11 @@ class SessionRecorder:
             arrays["faces"] = np.asarray(self._faces)
             arrays["right_eyes"] = np.asarray(self._reyes)
             arrays["left_eyes"] = np.asarray(self._leyes)
+            arrays["gaze_norm"] = np.asarray(self._gaze_norm, dtype=np.float32)
+            arrays["head_norm"] = np.asarray(self._head_norm, dtype=np.float32)
         meta = {"blendshape_names": names, "screen": self.meta.screen, "camera": self.meta.camera,
-                "participant": self.meta.participant, "condition": self.meta.condition}
+                "participant": self.meta.participant, "condition": self.meta.condition,
+                "condition_code": condition_code(self.meta.condition)}
         np.savez_compressed(self.path, meta=np.asarray(json.dumps(meta)), **arrays)  # type: ignore[arg-type]
         return self.path
 

@@ -56,7 +56,12 @@ def _samples(shards: str | None, n: int):  # type: ignore[no-untyped-def]
 
 
 def quantize(src: str | Path, dst: str | Path, calib: str | None, n: int = 500) -> Path:
-    from onnxruntime.quantization import CalibrationDataReader, QuantFormat, QuantType, quantize_static
+    from onnxruntime.quantization import (
+        CalibrationDataReader,
+        QuantFormat,
+        QuantType,
+        quantize_static,
+    )
     from onnxruntime.quantization.shape_inference import quant_pre_process
 
     class _Reader(CalibrationDataReader):  # type: ignore[misc]
@@ -89,10 +94,10 @@ def _copy_metadata(src: str | Path, dst: str | Path) -> None:
 
 
 def evaluate(path: str | Path, shards: str | None, n: int = 1000) -> dict[str, float]:
+    import onnxruntime as ort
+
     from gazeos.inference.gaze import decode_bins
     from gazeos.vision.geometry import angular_error_deg
-
-    import onnxruntime as ort
 
     opts = ort.SessionOptions()
     opts.intra_op_num_threads = 4

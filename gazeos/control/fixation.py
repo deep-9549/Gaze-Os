@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 import numpy as np
 from numpy.typing import NDArray
@@ -17,7 +17,7 @@ from numpy.typing import NDArray
 FloatArray = NDArray[np.float64]
 
 
-class EyeEvent(str, Enum):
+class EyeEvent(StrEnum):
     MOVING = "moving"
     SACCADE = "saccade"
     FIXATION = "fixation"

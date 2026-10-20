@@ -58,13 +58,13 @@ class HeadPose:
 
     @property
     def face_center(self) -> FloatArray:
-        return self.transform(fm.FACE_CENTER_MODEL_MM)[0]
+        return np.asarray(self.transform(fm.FACE_CENTER_MODEL_MM)[0], dtype=np.float64)
 
     @property
     def eye_centers(self) -> tuple[FloatArray, FloatArray]:
         """(right eye, left eye) centres in camera coordinates, mm."""
-        right = self.transform(fm.RIGHT_EYE_CENTER_MODEL_MM)[0]
-        left = self.transform(fm.LEFT_EYE_CENTER_MODEL_MM)[0]
+        right = np.asarray(self.transform(fm.RIGHT_EYE_CENTER_MODEL_MM)[0], dtype=np.float64)
+        left = np.asarray(self.transform(fm.LEFT_EYE_CENTER_MODEL_MM)[0], dtype=np.float64)
         return right, left
 
     @property
@@ -109,7 +109,8 @@ class HeadPoseEstimator:
         if not ok or tvec[2, 0] <= 0:
             self.reset()
             return None
-        self._rvec, self._tvec = rvec, tvec
+        self._rvec = np.asarray(rvec, dtype=np.float64)
+        self._tvec = np.asarray(tvec, dtype=np.float64)
         R, _ = cv2.Rodrigues(rvec)
         projected, _ = cv2.projectPoints(
             fm.PNP_MODEL_MM, rvec, tvec, self.intrinsics.matrix, self.intrinsics.dist

@@ -23,7 +23,8 @@ def tokenize(text: str) -> list[str]:
 
 
 def sentences(text: str) -> list[list[str]]:
-    out, cur = [], []
+    out: list[list[str]] = []
+    cur: list[str] = []
     for tok in tokenize(text):
         if tok in ".!?":
             if cur:
@@ -62,7 +63,7 @@ class KneserNeyTrigram:
                 self.c3[(a, b)][c] += 1
                 bigram_types.add((b, c))
                 trigram_left[(b, c)].add(a)
-        for b, c in bigram_types:
+        for _b, c in bigram_types:
             self.cont_unigram[c] += 1
         # Continuation counts for the bigram level: distinct left words of (b, c).
         for (b, c), lefts in trigram_left.items():

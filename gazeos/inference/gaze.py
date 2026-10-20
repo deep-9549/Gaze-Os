@@ -28,7 +28,7 @@ FloatArray = NDArray[np.float64]
 
 NUM_BINS = 28
 BIN_WIDTH_DEG = 3.0
-BIN_CENTERS_DEG = np.arange(NUM_BINS) * BIN_WIDTH_DEG - 42.0 + BIN_WIDTH_DEG / 2.0
+BIN_CENTERS_DEG: FloatArray = np.asarray(np.arange(NUM_BINS) * BIN_WIDTH_DEG - 42.0 + BIN_WIDTH_DEG / 2.0, dtype=np.float64)
 
 
 @dataclass
@@ -77,14 +77,14 @@ class OnnxGazeEstimator:
         k = int(meta.get("num_bins", NUM_BINS))
         width = float(bin_width_deg or meta.get("bin_width_deg", BIN_WIDTH_DEG))
         lo = float(meta.get("bin_min_deg", -k * width / 2.0))
-        self.centers = np.arange(k) * width + lo + width / 2.0
+        self.centers: FloatArray = np.asarray(np.arange(k) * width + lo + width / 2.0, dtype=np.float64)
 
     def estimate(self, norm: NormalizationResult) -> GazeEstimate:
         import cv2
 
         face = norm.face
         if face.shape[0] != self.face_size:
-            face = cv2.resize(face, (self.face_size, self.face_size), interpolation=cv2.INTER_LINEAR)
+            face = np.asarray(cv2.resize(face, (self.face_size, self.face_size), interpolation=cv2.INTER_LINEAR), dtype=np.uint8)
         feeds: dict[str, NDArray[np.float32]] = {"face": face_to_tensor(face)}
         if "right_eye" in self.input_names:
             feeds["right_eye"] = eye_to_tensor(norm.right_eye)

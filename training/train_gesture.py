@@ -103,15 +103,15 @@ def train(sessions: list[tuple[np.ndarray, np.ndarray]], model_name: str = "tcn"
     rng = np.random.default_rng(seed)
     n_val = max(1, len(sessions) // 5)
     train_s, val_s = sessions[n_val:], sessions[:n_val]  # subject-independent split by session
-    Xtr, ytr = map(np.concatenate, zip(*(windows(f, l) for f, l in train_s), strict=True))
-    Xva, yva = map(np.concatenate, zip(*(windows(f, l) for f, l in val_s), strict=True))
+    Xtr, ytr = map(np.concatenate, zip(*(windows(f, y) for f, y in train_s), strict=True))
+    Xva, yva = map(np.concatenate, zip(*(windows(f, y) for f, y in val_s), strict=True))
     mean, std = Xtr.reshape(-1, Xtr.shape[2]).mean(0), Xtr.reshape(-1, Xtr.shape[2]).std(0) + 1e-6
     model: nn.Module = TemporalCNN() if model_name == "tcn" else GRUClassifier()
     opt = torch.optim.AdamW(model.parameters(), lr=2e-3, weight_decay=1e-4)
     counts = np.bincount(ytr, minlength=len(GESTURE_CLASSES)).astype(np.float32)
     weights = torch.tensor(1.0 / np.sqrt(np.maximum(counts, 1)), dtype=torch.float32)
     loss_fn = nn.CrossEntropyLoss(weight=weights / weights.mean())
-    for ep in range(epochs):
+    for _ in range(epochs):
         model.train()
         perm = rng.permutation(len(Xtr))
         for i in range(0, len(perm), 128):

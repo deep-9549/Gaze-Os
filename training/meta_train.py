@@ -41,7 +41,7 @@ def extract(model, ds: GazeShardDataset, batch: int = 64) -> dict[int, tuple[np.
         trues.append(np.radians(b["gaze_deg"].numpy()))
         subs.append(np.asarray(b["subject"]))
     F, P, Y, S = map(np.concatenate, (feats, preds, trues, subs))
-    return {int(s): (F[S == s], P[S == s], Y[S == s]) for s in np.unique(S)}
+    return {int(s): (F[s == S], P[s == S], Y[s == S]) for s in np.unique(S)}
 
 
 def meta_train(

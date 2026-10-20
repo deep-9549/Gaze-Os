@@ -75,7 +75,7 @@ class HeatmapRecorder:
 
         g = gaussian_filter(self.grid, sigma=2.0)
         m = g.max()
-        return g / m if m > 0 else g
+        return np.asarray(g / m if m > 0 else g, dtype=np.float64)
 
     def save(self, path: str | Path) -> Path:
         p = Path(path)
@@ -84,8 +84,8 @@ class HeatmapRecorder:
         try:
             import cv2
 
-            img = (self.normalized() * 255).astype(np.uint8)
-            img = cv2.applyColorMap(cv2.resize(img, None, fx=self.cell, fy=self.cell), cv2.COLORMAP_INFERNO)
+            gray = (self.normalized() * 255).astype(np.uint8)
+            img = cv2.applyColorMap(cv2.resize(gray, None, fx=self.cell, fy=self.cell), cv2.COLORMAP_INFERNO)
             cv2.imwrite(str(p.with_suffix(".png")), img)
         except Exception:
             pass

@@ -73,14 +73,23 @@ class OneEuroFilter1D:
 
 
 class OneEuroFilter:
-    """Applied separately to screen x and y."""
+    """Applied separately to screen x and y.
 
-    def __init__(self, min_cutoff: float = 1.0, beta: float = 0.007, d_cutoff: float = 1.0) -> None:
+    `units_per_px` converts pixels to the units the parameters are tuned in.
+    The engine passes 1 / (pixels per degree), so beta is per degree/second and
+    the same settings work on any screen size or resolution.
+    """
+
+    def __init__(self, min_cutoff: float = 1.0, beta: float = 0.007, d_cutoff: float = 1.0,
+                 units_per_px: float = 1.0) -> None:
         self.fx = OneEuroFilter1D(min_cutoff, beta, d_cutoff)
         self.fy = OneEuroFilter1D(min_cutoff, beta, d_cutoff)
+        self.k = units_per_px
 
     def __call__(self, t: float, xy: FloatArray, sigma_px: float | None = None) -> FloatArray:
-        return np.array([self.fx(t, float(xy[0])), self.fy(t, float(xy[1]))], dtype=np.float64)
+        x = self.fx(t, float(xy[0]) * self.k)
+        y = self.fy(t, float(xy[1]) * self.k)
+        return np.array([x / self.k, y / self.k], dtype=np.float64)
 
     def reset(self) -> None:
         self.fx.reset()
@@ -140,13 +149,13 @@ class KalmanFilter2D:
         self._t = None
 
 
-def make_filter(s: FilterSettings) -> PointFilter:
+def make_filter(s: FilterSettings, px_per_deg: float = 1.0) -> PointFilter:
     if s.kind == "none":
         return NoFilter()
     if s.kind == "moving_average":
         return MovingAverage(s.moving_average_window)
     if s.kind == "one_euro":
-        return OneEuroFilter(s.min_cutoff_hz, s.beta, s.d_cutoff_hz)
+        return OneEuroFilter(s.min_cutoff_hz, s.beta, s.d_cutoff_hz, units_per_px=1.0 / px_per_deg)
     if s.kind == "kalman":
         return KalmanFilter2D(s.kalman_process_noise, s.kalman_measurement_noise_px)
     return KalmanFilter2D(s.kalman_process_noise, s.kalman_measurement_noise_px, uncertainty_aware=True)

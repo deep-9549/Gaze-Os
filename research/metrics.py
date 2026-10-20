@@ -103,9 +103,9 @@ def event_prf(detected: Sequence[float], labelled: Sequence[float], tolerance_s:
     tp = 0
     for d in det:
         best, best_j = tolerance_s + 1e-9, -1
-        for j, l in enumerate(lab):
-            if not used[j] and abs(d - l) <= best:
-                best, best_j = abs(d - l), j
+        for j, lt in enumerate(lab):
+            if not used[j] and abs(d - lt) <= best:
+                best, best_j = abs(d - lt), j
         if best_j >= 0:
             used[best_j] = True
             tp += 1

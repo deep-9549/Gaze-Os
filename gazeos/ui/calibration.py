@@ -167,9 +167,14 @@ class CalibrationWindow(QWidget):
 
     def _compute_result(self) -> None:
         if self.quick:
-            preds = [self.current_predict(s.obs) for s in self.samples] if self.current_predict else []
-            offset = (np.asarray(self.targets[0]) - np.median(np.stack(preds), axis=0)) if preds else None
-            res = validate([self.targets[0]], [self.targets[0]], self.geometry_)
+            quick = [self.current_predict(s.obs) for s in self.samples] if self.current_predict else []
+            if not quick:
+                self._finish(None)
+                return
+            med = np.median(np.stack(quick), axis=0)
+            offset = np.asarray(self.targets[0], dtype=np.float64) - med
+            # Report the drift that was corrected.
+            res = validate([(float(med[0]), float(med[1]))], [self.targets[0]], self.geometry_)
             self._finish(CalibrationOutcome(self.samples, self.personalizer, res, quick_offset=offset))
             return
         if len(self.samples) < 9:
@@ -181,11 +186,12 @@ class CalibrationWindow(QWidget):
             self.update()
             return
         self.personalizer.fit(self.samples)
-        preds, targets = [], []
+        preds: list[tuple[float, float]] = []
+        targets: list[tuple[float, float]] = []
         for obs_list, target in zip(self.val_obs, self.validation, strict=True):
             if obs_list:
                 p = np.median(np.stack([self.personalizer.predict_px(o) for o in obs_list]), axis=0)
-                preds.append(p)
+                preds.append((float(p[0]), float(p[1])))
                 targets.append(target)
         self.result = validate(preds, targets, self.geometry_) if preds else None
         self.start_btn.hide()
@@ -225,11 +231,11 @@ class CalibrationWindow(QWidget):
             if 0 <= self.index < len(pts):
                 x, y = pts[self.index]
                 since = time.monotonic() - self.shown_at
-                r = target_radius(since, self.s.target_duration_s)
+                radius = target_radius(since, self.s.target_duration_s)
                 c = QPointF(x / ratio, y / ratio)
                 p.setPen(Qt.PenStyle.NoPen)
                 p.setBrush(QBrush(color(self.theme_name, "accent" if self.phase == "calibrate" else "ok")))
-                p.drawEllipse(c, r, r)
+                p.drawEllipse(c, radius, radius)
                 p.setBrush(QBrush(color(self.theme_name, "bg")))
                 p.drawEllipse(c, 3, 3)
             label = "Calibrating" if self.phase == "calibrate" else "Checking accuracy"

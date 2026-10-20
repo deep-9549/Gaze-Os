@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from gazeos.gestures.blink import BlinkDetector, BlinkEvent, EyeState, eye_state, tune_long_blink_threshold
+from gazeos.gestures.blink import (
+    BlinkDetector,
+    BlinkEvent,
+    EyeState,
+    eye_state,
+    tune_long_blink_threshold,
+)
 from gazeos.gestures.events import FeatureWindow, GestureEventDetector, scale_by_gesture_size
 from gazeos.settings import BlinkSettings
 

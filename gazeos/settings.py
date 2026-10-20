@@ -6,13 +6,13 @@ its own copy.
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class ControlMode(str, Enum):
+class ControlMode(StrEnum):
     EYES_ONLY = "eyes_only"
     EYES_FACE = "eyes_face"
     HYBRID = "hybrid"

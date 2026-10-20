@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from Xlib import X, XK, display  # type: ignore[import-not-found]
+from Xlib import XK, X, display  # type: ignore[import-not-found]
 from Xlib.ext import xtest  # type: ignore[import-not-found]
 
 from gazeos.types import UIElement

@@ -11,12 +11,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 from gazeos.settings import BlinkSettings
 
 
-class BlinkEvent(str, Enum):
+class BlinkEvent(StrEnum):
     NORMAL_BLINK = "normal_blink"
     LONG_BLINK = "long_blink"
     LEFT_WINK = "left_wink"
@@ -91,7 +91,9 @@ class BlinkDetector:
         return event
 
     def _classify(self, t: float) -> BlinkEvent | None:
-        ms = lambda start: (t - start) * 1000.0 if start is not None else 0.0  # noqa: E731
+        def ms(start: float | None) -> float:
+            return (t - start) * 1000.0 if start is not None else 0.0
+
         if self._both_seen:
             dur = ms(self._both_start)
             self.last_closure_ms = dur

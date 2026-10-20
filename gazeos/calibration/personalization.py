@@ -142,7 +142,7 @@ class ScreenPolynomial(Personalizer):
         return B
 
     def _norm(self, px: FloatArray) -> FloatArray:
-        return np.atleast_2d(px) / np.array([self.geometry.width_px, self.geometry.height_px])
+        return np.asarray(np.atleast_2d(px) / np.array([self.geometry.width_px, self.geometry.height_px]), dtype=np.float64)
 
     def fit(self, samples: list[CalibrationSample]) -> None:
         if not samples:

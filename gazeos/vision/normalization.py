@@ -113,8 +113,8 @@ def normalize(
 ) -> NormalizationResult:
     """Produce the normalized 224x224 face and two 36x60 eye crops."""
     W, R_n, S = warp_matrix(pose.face_center, pose.R, intrinsics)
-    face = cv2.warpPerspective(image_rgb, W, (FACE_SIZE, FACE_SIZE), flags=cv2.INTER_LINEAR)
-    gray = cv2.cvtColor(face, cv2.COLOR_RGB2GRAY)
+    face = np.asarray(cv2.warpPerspective(image_rgb, W, (FACE_SIZE, FACE_SIZE), flags=cv2.INTER_LINEAR), dtype=np.uint8)
+    gray = np.asarray(cv2.cvtColor(face, cv2.COLOR_RGB2GRAY), dtype=np.uint8)
     pts = _warp_points(
         W,
         landmarks_px[

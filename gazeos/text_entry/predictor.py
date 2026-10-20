@@ -108,10 +108,10 @@ class Predictor:
                 add(w, math.log(self.lm_prob(w, context)) - 2.0 if gaze_points else math.log(self.lm_prob(w, context)), "trie")
         else:
             if self.ngram is not None:
-                for w, p in self.ngram.next_words(context, self.k * 2):
+                for w, _p in self.ngram.next_words(context, self.k * 2):
                     add(w, math.log(self.lm_prob(w, context)), "ngram")
             if self.transformer is not None:
-                for w, p in self.transformer.next_words(context, self.k * 2):
+                for w, _p in self.transformer.next_words(context, self.k * 2):
                     add(w, math.log(self.lm_prob(w, context)), "transformer")
             if not scores:
                 for w, _ in self.trie.complete("", self.k):

@@ -16,7 +16,13 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from training.models.gazenet import BIN_MIN_DEG, BIN_WIDTH_DEG, ExportWrapper, GazeNetGOS, bin_centers_deg
+from training.models.gazenet import (
+    BIN_MIN_DEG,
+    BIN_WIDTH_DEG,
+    ExportWrapper,
+    GazeNetGOS,
+    bin_centers_deg,
+)
 
 INPUT_NAMES = ["face", "right_eye", "left_eye", "head"]
 
