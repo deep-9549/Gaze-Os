@@ -100,6 +100,10 @@ class AngularOffset(Personalizer):
         self.fitted = True
 
 
+def _distinct_targets(samples: list[CalibrationSample]) -> int:
+    return len({(round(float(s.target_px[0])), round(float(s.target_px[1]))) for s in samples})
+
+
 def _poly2(xy: FloatArray) -> FloatArray:
     x, y = xy[:, 0], xy[:, 1]
     return np.stack([np.ones_like(x), x, y, x * y, x * x, y * y], axis=1)
@@ -146,8 +150,15 @@ class ScreenPolynomial(Personalizer):
         X = _poly2(self._norm(np.stack([s.obs.screen_px for s in samples])))
         Y = self._norm(np.stack([s.target_px for s in samples]))
         w = _weights(samples)
-        # Fewer points -> stronger pull toward the identity for the quadratic terms.
-        alpha = self.alpha * (9.0 / max(len(samples) / 30.0, 1.0))
+        # Few distinct targets cannot constrain scale or curvature: pull hard toward
+        # the identity so the fit degrades to a translation (an offset correction).
+        distinct = _distinct_targets(samples)
+        if distinct >= 9:
+            alpha = self.alpha
+        elif distinct >= 5:
+            alpha = self.alpha * 30.0
+        else:
+            alpha = 1e4
         self.coef = _weighted_ridge(X, Y, w, alpha, prior=self._identity())
         self.fitted = True
 
@@ -289,14 +300,17 @@ class LastLayerFineTune(Personalizer):
         lr: float = 0.05,
         l2: float = 1e-2,
         init: tuple[FloatArray, FloatArray] | None = None,
+        norm: tuple[FloatArray, FloatArray] | None = None,
     ) -> None:
         super().__init__(geometry)
         self.steps, self.lr, self.l2 = steps, lr, l2
         self.W: FloatArray | None = None
         self.b = np.zeros(2)
         self._init = init
-        self._mu: FloatArray | None = None
-        self._sd: FloatArray | None = None
+        # A meta-learned init is only valid with the feature normalization it was trained with.
+        self._fixed_norm = norm
+        self._mu: FloatArray | None = None if norm is None else norm[0]
+        self._sd: FloatArray | None = None if norm is None else norm[1]
 
     def _feat(self, obs: GazeObservation) -> FloatArray:
         if obs.features is None:
@@ -310,13 +324,19 @@ class LastLayerFineTune(Personalizer):
         if not samples:
             return
         raw = np.stack([np.asarray(s.obs.features, dtype=np.float64) for s in samples])
-        self._mu = raw.mean(axis=0)
-        self._sd = raw.std(axis=0) + 1e-6
+        if self._fixed_norm is None:
+            self._mu = raw.mean(axis=0)
+            self._sd = raw.std(axis=0) + 1e-6
+        else:
+            self._mu, self._sd = self._fixed_norm
         F = (raw - self._mu) / self._sd
         target = np.stack([true_pitchyaw(s, self.geometry) - s.obs.pitchyaw for s in samples])
         w = _weights(samples)
         w = w / max(w.sum(), 1e-9)
         d = F.shape[1]
+        # With fewer than 5 distinct targets only the bias (an angular offset) is
+        # learnable; the feature weights would just fit per-frame noise.
+        bias_only = _distinct_targets(samples) < 5 and self._init is None
         W = np.zeros((d, 2)) if self._init is None else self._init[0].copy()
         b = target.T @ w if self._init is None else self._init[1].copy()
         # Adam on the weighted squared error plus L2 toward zero correction.
@@ -333,7 +353,8 @@ class LastLayerFineTune(Personalizer):
             mb = b1 * mb + (1 - b1) * gb
             vb = b2 * vb + (1 - b2) * gb**2
             c1, c2 = 1 - b1**step, 1 - b2**step
-            W -= lr * (mW / c1) / (np.sqrt(vW / c2) + eps)
+            if not bias_only:
+                W -= lr * (mW / c1) / (np.sqrt(vW / c2) + eps)
             b -= lr * (mb / c1) / (np.sqrt(vb / c2) + eps)
         self.W, self.b = W, b
         self.fitted = True
@@ -367,7 +388,7 @@ class MetaLearnedAdaptation(LastLayerFineTune):
     @classmethod
     def from_file(cls, geometry: ScreenGeometry, path: str | Path, steps: int = 20) -> MetaLearnedAdaptation:
         data = np.load(path)
-        return cls(geometry, steps=steps, init=(data["W"], data["b"]))
+        return cls(geometry, steps=steps, init=(data["W"], data["b"]), norm=(data["mu"], data["sd"]))
 
 
 METHODS: dict[str, type[Personalizer]] = {

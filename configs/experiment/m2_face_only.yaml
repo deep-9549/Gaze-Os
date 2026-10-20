@@ -1,0 +1,4 @@
+# @package _global_
+# M2 / E2: face-only ResNet-18 with the L2CS head.
+model: {backbone: resnet18, use_eyes: false, use_head: false, fusion: concat}
+data: {shards: [data/shards/mpiifacegaze/*.h5], fold: 0}

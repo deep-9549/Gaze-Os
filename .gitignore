@@ -25,3 +25,8 @@ recordings/
 *.hdf5
 # Model files are tracked with Git LFS (see .gitattributes); the MediaPipe task file is downloaded.
 models/face_landmarker.task
+
+# Generated locally; real results are written up in the report.
+results/
+figures/
+models/smoke_*

@@ -1,0 +1,7 @@
+# @package _global_
+# Stage B (PRD 16.1): fine-tune on MPIIFaceGaze for 10 epochs inside each LOSO fold (fold=0..14).
+# For deployment set fold=null to use all 15 subjects.
+init_checkpoint: outputs/stage_a/best.pt
+model: {backbone: resnet18}
+data: {shards: [data/shards/mpiifacegaze/*.h5], fold: 0, val_fraction: 0.15}
+train: {epochs: 10, lr_backbone: 5.0e-5, lr_new: 5.0e-4, warmup_epochs: 0, nll_warmup_epochs: 2}
