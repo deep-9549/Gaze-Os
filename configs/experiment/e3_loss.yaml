@@ -1,0 +1,5 @@
+# @package _global_
+# E3: output and loss. Overrides: train.loss_mode=regression|classification|combined,
+# train.beta=1|2, model.num_bins=21 (4-degree bins; also set the bin width in the losses).
+data: {shards: [data/shards/mpiifacegaze/*.h5], fold: 0}
+train: {epochs: 15}

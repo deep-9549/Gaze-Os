@@ -1,0 +1,121 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gazeos"
+version = "0.1.0"
+description = "Hands-free computer control with an ordinary webcam: gaze pointing, blink and gesture clicks, and predictive gaze typing."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Deep" }]
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "scikit-learn>=1.4",
+    "opencv-python-headless>=4.9",
+    "pydantic>=2.6",
+    "psutil>=5.9",
+]
+
+[project.optional-dependencies]
+# Everything needed to run the desktop app (no PyTorch: Section 8.3).
+app = [
+    "mediapipe>=0.10.14",
+    "onnxruntime>=1.17",
+    # 6.12.0 over-releases None on QPainter setters, which crashes the 60 Hz overlay
+    # within minutes on Python 3.11 ("none_dealloc"). Re-test before lifting the cap.
+    "PySide6>=6.6,<6.12",
+    "pynput>=1.7",
+    "pyttsx3>=2.90",
+    "uiautomation>=2.0; sys_platform == 'win32'",
+    "pywin32>=306; sys_platform == 'win32'",
+    "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
+    "pyobjc-framework-ApplicationServices>=10.0; sys_platform == 'darwin'",
+    "python-xlib>=0.33; sys_platform == 'linux'",
+    "evdev>=1.6; sys_platform == 'linux'",
+]
+# Training and export; never shipped with the app.
+train = [
+    "torch>=2.2",
+    "torchvision>=0.17",
+    "onnx>=1.15",
+    "onnxruntime>=1.17",
+    "h5py>=3.10",
+    "hydra-core>=1.3",
+    "omegaconf>=2.3",
+    "tokenizers>=0.15",
+    "tensorboard>=2.15",
+]
+research = [
+    "pandas>=2.1",
+    "matplotlib>=3.8",
+    "statsmodels>=0.14",
+]
+docs = [
+    "mkdocs-material>=9.5",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "pytest-qt>=4.3",
+    "hypothesis>=6.98",
+    "ruff>=0.4",
+    "mypy>=1.9",
+]
+
+[project.scripts]
+gazeos = "gazeos.main:main"
+
+[tool.setuptools.packages.find]
+include = ["gazeos*", "training*", "research*", "tools*"]
+
+[tool.setuptools.package-data]
+gazeos = ["py.typed", "text_entry/data/*.txt"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "NPY"]
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
+# Backends carry platform-specific ignores (windll, Quartz) that look unused on other OSes.
+warn_unused_ignores = false
+disable_error_code = ["unused-ignore"]
+
+[[tool.mypy.overrides]]
+# Section 22: strict typing on the core logic of the shipped app.
+module = [
+    "gazeos.control.*",
+    "gazeos.calibration.*",
+    "gazeos.gestures.*",
+    "gazeos.text_entry.*",
+    "gazeos.profiles.*",
+    "gazeos.vision.*",
+    "gazeos.types",
+    "gazeos.settings",
+]
+strict = true
+warn_unused_ignores = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "torch: needs PyTorch (training extras)",
+    "qt: needs PySide6",
+    "slow: longer-running smoke tests",
+]
+
+[tool.coverage.run]
+source = ["gazeos"]
+omit = ["gazeos/ui/*", "gazeos/os_backends/windows.py", "gazeos/os_backends/macos.py", "gazeos/os_backends/linux_*.py", "gazeos/main.py"]

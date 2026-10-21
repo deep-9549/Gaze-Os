@@ -1,0 +1,51 @@
+# Base training config (PRD 10.5). Experiments in configs/experiment/ override it.
+defaults:
+  - _self_
+  - experiment: null
+
+seed: 0
+output_dir: outputs/${hydra:job.name}/${now:%Y%m%d-%H%M%S}
+init_checkpoint: null
+
+model:
+  backbone: resnet18        # resnet18 (M3), mobilenet_v3_small (M4), resnet50
+  pretrained: true
+  use_face: true
+  use_eyes: true
+  use_head: true
+  fusion: transformer       # transformer | concat
+  num_bins: 28              # 3-degree bins covering -42 to +42
+  dropout: 0.3
+
+data:
+  shards: [data/shards/mpiifacegaze/*.h5]
+  fold: null                # leave-one-subject-out test subject index, or null
+  val_fraction: 0.1
+  stride: 1                 # subsampling; recorded with the results
+  augment: true
+  workers: 4
+
+train:
+  device: auto
+  epochs: 25
+  batch_size: 128
+  lr_backbone: 1.0e-4
+  lr_new: 1.0e-3
+  weight_decay: 1.0e-4
+  warmup_epochs: 1
+  patience: 5
+  amp: true
+  beta: 1.0
+  nll_weight: 0.1
+  nll_warmup_epochs: 5
+  loss_mode: combined       # combined | classification | regression (E3)
+
+logging:
+  backend: tensorboard      # tensorboard | wandb | none
+  project: gazeos
+
+hydra:
+  run:
+    dir: ${output_dir}
+  job:
+    chdir: false

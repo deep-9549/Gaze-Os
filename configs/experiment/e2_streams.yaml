@@ -1,0 +1,7 @@
+# @package _global_
+# E2 (PRD 16.2): which input streams matter. Run with overrides, e.g.
+#   model.use_face=false            (eyes only)
+#   model.use_head=false            (face + eyes)
+#   model.fusion=concat             (concat vs transformer fusion)
+data: {shards: [data/shards/mpiifacegaze/*.h5], fold: 0}
+train: {epochs: 15}

@@ -1,0 +1,6 @@
+# @package _global_
+# E5: ImageNet-only vs ImageNet + ETH-XGaze. This is the ImageNet-only arm;
+# the other arm is stage_b_mpii (initialized from Stage A).
+init_checkpoint: null
+data: {shards: [data/shards/mpiifacegaze/*.h5], fold: 0}
+train: {epochs: 10}

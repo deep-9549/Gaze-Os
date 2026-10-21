@@ -1,0 +1,6 @@
+# @package _global_
+# CI / laptop smoke test on procedural data: checks the whole training path, not accuracy.
+model: {backbone: mobilenet_v3_small, pretrained: false}
+data: {shards: [data/shards/synthetic/*.h5], workers: 0, val_fraction: 0.2, fold: 0}
+train: {epochs: 2, batch_size: 32, warmup_epochs: 0, nll_warmup_epochs: 1, amp: false, device: cpu}
+logging: {backend: none}

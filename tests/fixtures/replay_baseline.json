@@ -1,0 +1,5 @@
+{
+  "mean_error_px": 44.82,
+  "jitter_px": 8.47,
+  "note": "Synthetic replay session; regenerate with tests/fixtures/README.md when the pipeline intentionally changes."
+}

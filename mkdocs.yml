@@ -1,0 +1,26 @@
+site_name: GazeOS
+site_description: Hands-free computer control with an ordinary webcam
+docs_dir: docs
+theme:
+  name: material
+  palette:
+    - scheme: default
+      toggle: {icon: material/brightness-7, name: Dark mode}
+    - scheme: slate
+      toggle: {icon: material/brightness-4, name: Light mode}
+nav:
+  - Home: index.md
+  - Product requirements: PRD.md
+  - Build status: STATUS.md
+  - Your next steps: HANDOFF.md
+  - Training: TRAINING.md
+  - Datasets: DATASETS.md
+  - Decisions:
+      - ONNX Runtime: adr/0001-onnx-runtime.md
+      - Personalization after the network: adr/0002-personalization-after-network.md
+      - Word-level transformer: adr/0003-word-level-transformer.md
+      - Package layout: adr/0004-package-layout.md
+      - Filter units: adr/0005-filter-units.md
+  - User study: study/README.md
+  - Model card template: models/MODEL_CARD_TEMPLATE.md
+  - Third-party material: THIRD_PARTY.md

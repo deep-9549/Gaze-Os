@@ -1,0 +1,5 @@
+# @package _global_
+# Stage A (PRD 16.1): M3 pre-training on ETH-XGaze, 25 epochs. ~15-20 GPU hours on a subset.
+model: {backbone: resnet18}
+data: {shards: [data/shards/ethxgaze/*.h5], stride: 3, fold: null, val_fraction: 0.1}
+train: {epochs: 25, batch_size: 128}

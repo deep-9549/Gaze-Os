@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[app,dev]"
+      - name: Ruff
+        run: ruff check .
+      - name: Mypy (strict on app core, PRD 22)
+        run: mypy gazeos
+
+  test-app:
+    name: Tests (app, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: System libraries for Qt and the X11 backend test
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 \
+            libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 libxcb-randr0 libxcb-render-util0 \
+            libxcb-image0 libfontconfig1 libdbus-1-3
+      - run: pip install -e ".[app,research,dev]"
+      - name: Unit, property, replay, backend and UI tests with coverage (>= 70% of core logic)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest -m "not torch" --cov=gazeos --cov-report=term-missing --cov-fail-under=70
+
+  test-training:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+      - run: pip install -e ".[app,train,research,dev]"
+      - name: Model, export and training tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest -m torch
+      - name: End-to-end training smoke run on synthetic data
+        run: |
+          python -m training.data.packers synthetic - data/shards/synthetic
+          python -m training.train experiment=smoke_synthetic output_dir=outputs/smoke train.epochs=1
+          python -m training.export_onnx outputs/smoke/best.pt models/smoke.onnx --parity-shards "data/shards/synthetic/*.h5" --n 100

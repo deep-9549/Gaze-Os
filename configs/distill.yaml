@@ -1,0 +1,12 @@
+# Stage C distillation (PRD 10.7): M3 teacher -> M4 Lite student.
+defaults:
+  - train
+  - _self_
+
+teacher: outputs/m3/best.pt
+temperature: 4.0
+output_dir: outputs/distill/${now:%Y%m%d-%H%M%S}
+data:
+  fold: null
+train:
+  epochs: 20
