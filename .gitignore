@@ -11,7 +11,7 @@ dist/
 .coverage
 htmlcov/
 # Large or private artifacts: datasets, checkpoints and recordings never go in Git.
-data/
+/data/
 datasets/
 checkpoints/
 runs/
