@@ -18,6 +18,30 @@ python -m training.export_onnx outputs/smoke/best.pt models/smoke.onnx --parity-
 python -m training.train experiment=stage_a_ethxgaze output_dir=outputs/stage_a seed=0
 ```
 
+### 1b. Stage A without ETH-XGaze (current plan, see [PLAN.md](PLAN.md))
+
+`data/` and `outputs/` are junctions to `F:\GazeOS-data`. Pack RT-GENE straight from its tars,
+then compare four starting points on MPIIFaceGaze folds 0-2 with the same Stage B schedule
+(on the 4 GB laptop GPU add `train.batch_size=64`):
+
+```bash
+python -m training.data.packers rtgene data/raw/rtgene data/shards/rtgene
+
+# Stage A runs for arms c and d (s014-s016 stay out as a cross-dataset test)
+python -m training.train experiment=stage_a_rtgene     output_dir=outputs/stage_a_rtgene
+python -m training.train experiment=stage_a_rtgene_eth output_dir=outputs/stage_a_rtgene_eth
+
+for f in 0 1 2; do
+  python -m training.train experiment=stage_b_mpii data.fold=$f init_checkpoint=null output_dir=outputs/arms/a_imagenet/fold$f
+  python -m training.train experiment=stage_b_eth_init data.fold=$f output_dir=outputs/arms/b_eth/fold$f
+  python -m training.train experiment=stage_b_mpii data.fold=$f init_checkpoint=outputs/stage_a_rtgene/best.pt output_dir=outputs/arms/c_rtgene/fold$f
+  python -m training.train experiment=stage_b_mpii data.fold=$f init_checkpoint=outputs/stage_a_rtgene_eth/best.pt output_dir=outputs/arms/d_eth_rtgene/fold$f
+done
+```
+
+The winner becomes `init_checkpoint` (or `init_face_checkpoint`) for the full Stage B below and
+replaces the ETH-XGaze arm of E5.
+
 ## 2. Stage B: fine-tune on MPIIFaceGaze
 
 Benchmark (E1, leave-one-subject-out, 15 folds):
@@ -78,8 +102,13 @@ python -m training.train_lm ngram data/corpus/*.txt --out models/ngram_en.json
 python -m training.train_lm gpt   data/corpus/*.txt --out models/lm_small.onnx --epochs 3
 ```
 
-## Kaggle notes
+## Cloud training (Colab, Kaggle)
 
-- Upload `data/shards/` as a private Kaggle dataset; never the raw datasets (licences).
-- `pip install -e .[train]` in the notebook, then the commands above with `data.workers=2`.
-- Mixed precision is on by default on GPU (`train.amp=true`).
+- `notebooks/train_cloud.ipynb` runs on both: edit its settings cell (data folder, job list), run all.
+- Upload `data/shards/` (and `data/weights/`) to a private Google Drive folder or a private Kaggle
+  dataset; never the raw datasets (licences), and never a public link.
+- The notebook copies shards to the local disk first (HDF5 over the Drive mount is slow) and writes
+  outputs to Drive on Colab, so a disconnect costs at most one epoch.
+- `train.resume=true` continues a run from `output_dir/last.pt`; finished runs (with `result.json`)
+  are skipped, so re-running the notebook after a disconnect picks up where it stopped.
+- Mixed precision is on by default on GPU (`train.amp=true`); use `data.workers=2`.

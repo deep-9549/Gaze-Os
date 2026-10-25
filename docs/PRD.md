@@ -715,7 +715,7 @@ Twelve planned experiments each answer one question with one table or chart in t
 
 ### 16.1 Training stages
 
-1. **Stage A, pre-training:** GazeNet-GOS (M3) on ETH-XGaze for 25 epochs.
+1. **Stage A, pre-training:** GazeNet-GOS (M3) on ETH-XGaze for 25 epochs. (Oct 2026: ETH-XGaze access was not obtained; Stage A now compares an ETH-XGaze-trained ResNet-18 face stream and RT-GENE pre-training, see [PLAN.md](PLAN.md).)
 2. **Stage B, fine-tuning:** on MPIIFaceGaze for 10 epochs. For the benchmark this runs inside each leave-one-subject-out fold; for deployment it uses all 15 subjects.
 3. **Stage C, distillation:** train the Lite model (M4) from M3 (Section 10.7).
 4. **Stage D, meta-training (optional):** episodic training for personalization method P5.
@@ -1103,7 +1103,7 @@ The biggest risk is accuracy falling short of 2 degrees on real webcams; the des
 | --- | --- | --- | --- |
 | Accuracy above 2 degrees on real webcams | Small targets are hard to hit | Normalization, personalization P3 to P5, implicit recalibration | Zoom-click, snapping, large keys; report honest numbers |
 | Real-time speed missed on CPU | Laggy cursor | Distilled M4, INT8 quantization, frame dropping | Run gaze at 15 FPS with filtering at 30 FPS; smaller input size |
-| Dataset access delayed (ETH-XGaze approval) | Pre-training slips | Request access in week 1 | Start from released L2CS-Net weights; use MPIIFaceGaze only |
+| Dataset access delayed (ETH-XGaze approval) | Pre-training slips | Request access in week 1 | Start from released L2CS-Net weights; use MPIIFaceGaze only. Taken in Oct 2026: ETH-XGaze-trained ResNet-18 weights plus RT-GENE pre-training ([PLAN.md](PLAN.md)) |
 | Not enough free GPU time | Fewer experiments | Plan runs early; subsample ETH-XGaze; smaller backbones | One month of Colab Pro (about Rs 1,000) |
 | Poor lighting at demo venue | Tracking drops during the viva | Low-light warning, CLAHE, exposure lock | Bring a small desk lamp and an external webcam |
 | Glasses glare | Eye crops wash out | Augmentation with glare; face stream compensates | Ask the user to tilt glasses slightly; report as limitation |

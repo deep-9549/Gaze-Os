@@ -101,19 +101,19 @@ uv pip install --python .venv -e ".[app,train,research,dev]"
 
 | # | Step | Status |
 | --- | --- | --- |
-| 8 | `pack_rtgene` in `training/data/packers.py`: inpainted face and eye crops (grayscale + CLAHE, left eye mirrored), `gaze=(B, A)`, `head=(B, A, 0)`, subject ids 2000+n, skip frames without images, drop angles outside the ±42° bins, check left/right eye against the face | To do |
-| 9 | `training/convert_eth_resnet18.py` and an `init_face_checkpoint` option in `train.py` (timm and torchvision ResNet-18 keys match; drop `fc`); `.safetensors` input for `convert_l2cs.py`; add `safetensors` to the `train` extra in `pyproject.toml` | To do |
-| 10 | Configs `stage_a_rtgene.yaml`, `stage_a_eth_init.yaml`; point `stage_b_mpii.yaml` at the winner of step 15 | To do |
-| 11 | Shard globbing accepts absolute paths (`make_loaders` uses `Path().glob`, which rejects them) | To do |
-| 12 | `train.resume=true`: save the last epoch and continue after a cloud disconnect | To do |
-| 13 | One notebook for Colab and Kaggle: get shards, copy to local disk, run a list of folds and seeds, save results to Drive | To do |
-| 14 | Tests (tiny fake RT-GENE tar); update DATASETS.md, TRAINING.md, HANDOFF.md, PRD 15, 16 and 27 | To do |
+| 8 | `pack_rtgene` in `training/data/packers.py`: inpainted face and eye crops (grayscale + CLAHE, left eye mirrored), `gaze=(B, A)`, `head=(B, A, 0)`, subject ids 2000+n, skip frames without images, drop angles outside the ±42° bins | Done. Eye sides measured by template matching on 50 frames: `right` is always image-left, so the folders name the subject's own eyes |
+| 9 | `init_face_checkpoint` in `train.py` loads the ETH-XGaze ResNet-18 straight into the face stream (no separate converter needed); `.safetensors` input for `convert_l2cs.py`; `safetensors` in the `train` extra | Done |
+| 10 | Configs `stage_a_rtgene.yaml`, `stage_a_rtgene_eth.yaml`, `stage_b_eth_init.yaml`; `data.exclude_subjects` keeps s014-s016 out; point Stage B at the winner of step 18 | Done (pointing at the winner waits for step 18) |
+| 11 | Shard globbing accepts absolute paths (`glob.glob` instead of `Path().glob`) | Done |
+| 12 | `train.resume=true`: `last.pt` every epoch (model, optimizer, scheduler, scaler, early-stop state) | Done |
+| 13 | `notebooks/train_cloud.ipynb` for Colab and Kaggle: clone the branch, copy shards to local disk, run a job list, resume or skip finished jobs, outputs on Drive | Done (not yet run on Colab or Kaggle) |
+| 14 | Tests (fake RT-GENE tar, face init, safetensors L2CS, resume + absolute paths); DATASETS.md, TRAINING.md, HANDOFF.md, PRD 16.1 and 27 updated | Done: 117 passed, ruff and mypy clean |
 
 ### Phase 3: pack and check
 
 | # | Step | Status |
 | --- | --- | --- |
-| 15 | Pack MPIIFaceGaze (15 subjects) and RT-GENE into `data/shards/` | To do |
+| 15 | Pack MPIIFaceGaze (15 subjects) and RT-GENE into `data/shards/` | In progress |
 | 16 | Checks: image grid with gaze arrows; RT-GENE vs MPII head-pose spread (head signs); an MPII-trained model on RT-GENE has positive per-axis correlation | To do |
 | 17 | Upload shards to the private Drive folder | To do |
 
@@ -158,3 +158,4 @@ uv pip install --python .venv -e ".[app,train,research,dev]"
 | 2026-10-26 | Phase 0 done. MediaPipe resolved to 1.1.1 (newer than the code was written against); the unit tests pass, but check landmarks on a live webcam with `gazeos --dry-run`. Synthetic shards take about 190 KB per sample, so expect roughly 10-20 GB for RT-GENE. |
 | 2026-10-26 | Steps 4 and 5 done: MPIIFaceGaze complete (15 subjects, 37,667 images); RT-GENE complete (17 subjects, about 114,600 frames). |
 | 2026-10-26 | Step 6 done: L2CS Gaze360 (py-feat mirror) and ETH-XGaze ResNet-18 weights in `weights/`, both checked against the models they load into. GazeGene deferred until Phase 4 shows whether more pre-training helps. |
+| 2026-10-26 | Phase 2 done on branch `feature/no-ethxgaze-pipeline`. Google Drive access for step 17 goes through Google Drive for desktop (a local synced folder); the Drive folder must stay Restricted. Packing started. |
