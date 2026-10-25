@@ -1,5 +1,7 @@
 """HDF5 shard format and the PyTorch dataset over it (PRD 15.4).
 
+    python -m training.data.shards rechunk data/shards/rtgene data/shards/rtgene   # one sample per image chunk
+
 Every shard holds, per sample:
   face       uint8 (224, 224, 3) normalized face, RGB
   right_eye  uint8 (36, 60)      normalized right eye, grayscale
@@ -22,6 +24,9 @@ import numpy as np
 from numpy.typing import NDArray
 
 FIELDS = ("face", "right_eye", "left_eye", "head", "gaze", "subject", "condition")
+# Images are compressed one sample per chunk: training reads in random order, and a
+# 64-sample chunk meant decompressing 64 faces to use one (36x slower on an SSD).
+IMAGE_FIELDS = ("face", "right_eye", "left_eye")
 
 # Normalized face: eyes sit about 51 px either side of centre and 10 px above it
 # (60 mm apart at 600 mm with a 960 px focal length). Used when a dataset gives
@@ -44,9 +49,10 @@ class ShardWriter:
         dtypes = {"face": "u1", "right_eye": "u1", "left_eye": "u1", "head": "f4", "gaze": "f4",
                   "subject": "i4", "condition": "i4"}
         for k in FIELDS:
+            image = k in IMAGE_FIELDS
             self.f.create_dataset(k, shape=(0, *shapes[k]), maxshape=(None, *shapes[k]), dtype=dtypes[k],
-                                  chunks=(min(chunk, 64), *shapes[k]),
-                                  compression="lzf" if k in ("face", "right_eye", "left_eye") else None)
+                                  chunks=(1 if image else min(chunk, 64), *shapes[k]),
+                                  compression="lzf" if image else None)
 
     def add(self, face: NDArray[np.uint8], right_eye: NDArray[np.uint8], left_eye: NDArray[np.uint8],
             head: Sequence[float], gaze: Sequence[float], subject: int, condition: int = 0) -> None:
@@ -83,6 +89,22 @@ def fixed_eye_crops(face_rgb: NDArray[np.uint8]) -> tuple[NDArray[np.uint8], NDA
         crops.append(apply_clahe(np.ascontiguousarray(gray[y0:y0 + h, x0:x0 + w])))
     # Image-left eye is the subject's right eye; mirror the other.
     return crops[0], np.ascontiguousarray(cv2.flip(crops[1], 1))
+
+
+def rechunk(src: str | Path, dst: str | Path) -> Path:
+    """Rewrite a shard packed with 64-sample image chunks to one sample per chunk."""
+    import h5py
+
+    dst = Path(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(src, "r") as a, h5py.File(dst, "w") as b:
+        for k in FIELDS:
+            d = a[k]
+            image = k in IMAGE_FIELDS
+            b.create_dataset(k, data=d[:], chunks=(1, *d.shape[1:]) if image else None,
+                             compression="lzf" if image else None)
+        b.attrs.update(a.attrs)
+    return dst
 
 
 def file_checksum(path: str | Path, block: int = 1 << 20) -> str:
@@ -173,3 +195,32 @@ class GazeShardDataset:
             with h5py.File(p, "r") as f:
                 out |= set(int(s) for s in np.unique(f["subject"][:]))
         return sorted(out)
+
+
+def main() -> None:
+    """python -m training.data.shards rechunk SRC_DIR DST_DIR  (DST_DIR may equal SRC_DIR)."""
+    import argparse
+    import glob
+    import os
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("command", choices=["rechunk"])
+    ap.add_argument("src")
+    ap.add_argument("dst")
+    a = ap.parse_args()
+    outs = []
+    for src in sorted(glob.glob(os.path.join(a.src, "*.h5"))):
+        dst = Path(a.dst) / Path(src).name
+        tmp = rechunk(src, dst.with_suffix(".h5.tmp"))
+        os.replace(tmp, dst)
+        outs.append(dst)
+        print(dst)
+    manifest = Path(a.src) / "manifest.json"
+    extra = json.loads(manifest.read_text()) if manifest.exists() else {}
+    extra.pop("files", None)
+    extra.pop("commit", None)
+    write_manifest(outs, Path(a.dst) / "manifest.json", {**extra, "rechunked_from": str(a.src)})
+
+
+if __name__ == "__main__":
+    main()

@@ -80,6 +80,23 @@ def test_shards_and_augmentation(tmp_path) -> None:
     assert np.array_equal(flipped["face"], raw["face"][:, ::-1])
 
 
+def test_image_chunks_hold_one_sample_and_rechunk_keeps_data(tmp_path) -> None:
+    import h5py
+
+    from training.data.shards import rechunk
+
+    (path,) = pack_synthetic(str(tmp_path / "s"), subjects=1, per_subject=70)
+    old = tmp_path / "old.h5"
+    with h5py.File(path, "r") as a, h5py.File(old, "w") as b:  # the previous 64-sample layout
+        assert a["face"].chunks[0] == 1 and a["gaze"].chunks[0] == 64
+        for k in a:
+            b.create_dataset(k, data=a[k][:], chunks=(64, *a[k].shape[1:]) if a[k].ndim > 1 else None)
+    new = rechunk(old, tmp_path / "new.h5")
+    with h5py.File(old, "r") as a, h5py.File(new, "r") as b:
+        assert b["face"].chunks[0] == 1 and b["left_eye"].compression == "lzf"
+        assert all(np.array_equal(a[k][:], b[k][:]) for k in a)
+
+
 def test_export_parity_and_runtime(tmp_path) -> None:
     """Exported model loads in the runtime estimator and matches PyTorch (PRD 10.8, 23)."""
     from gazeos.inference.gaze import OnnxGazeEstimator
