@@ -16,7 +16,10 @@ that folder is used on F:. `outputs/` is likewise a junction to
 `F:\GazeOS-data\outputs`. The repo drive (D:, about 90 GB free) holds the
 `.venv` (Python 3.11 managed by uv) and the uv cache at `D:\.uv-cache`.
 Packed shards (not raw data) are mirrored to a private Google Drive folder for
-cloud training.
+cloud training: `G:\My Drive\Minor Project\GazeOS` on the laptop (Google Drive for
+desktop), `/content/drive/MyDrive/Minor Project/GazeOS` on Colab, laid out as
+`data\shards\<set>`, `data\weights\<model>` and `outputs\`. Only that folder is
+used on the Drive.
 
 | Dataset | Location | State (26 Oct 2026) |
 | --- | --- | --- |
@@ -115,7 +118,7 @@ uv pip install --python .venv -e ".[app,train,research,dev]"
 | --- | --- | --- |
 | 15 | Pack MPIIFaceGaze (15 subjects) and RT-GENE into `data/shards/` | In progress |
 | 16 | Checks: image grid with gaze arrows; RT-GENE vs MPII head-pose spread (head signs); an MPII-trained model on RT-GENE has positive per-axis correlation | To do |
-| 17 | Upload shards to the private Drive folder | To do |
+| 17 | Copy shards to `G:\My Drive\Minor Project\GazeOS\data\shards` (Drive for desktop uploads them) | In progress: layout created, both weight files copied; shards follow step 16 |
 
 ### Phase 4: replacement Stage A (new E5)
 
