@@ -174,6 +174,29 @@ def test_rtgene_packer(tmp_path) -> None:
     assert np.array_equal(s["left_eye"], expected)  # the subject's left eye, mirrored
 
 
+def test_mpiifacegaze_packer_reads_real_line_format(tmp_path) -> None:
+    """Real pXX.txt lines have 28 columns; the last one is the word "left" or "right"."""
+    import cv2
+    import scipy.io
+
+    from training.data.packers import pack_mpiifacegaze
+
+    subj = tmp_path / "raw" / "p03"
+    (subj / "Calibration").mkdir(parents=True)
+    (subj / "day01").mkdir()
+    K = np.array([[960.0, 0, 320], [0, 960.0, 240], [0, 0, 1]])
+    scipy.io.savemat(subj / "Calibration" / "Camera.mat", {"cameraMatrix": K, "distCoeffs": np.zeros((1, 5))})
+    cv2.imwrite(str(subj / "day01" / "0001.jpg"), np.full((480, 640, 3), 128, np.uint8))
+    landmarks = [260, 220, 300, 220, 340, 220, 380, 220, 290, 320, 350, 320]
+    face_centre, target = [0.0, 0.0, 600.0], [0.0, -100.0, 0.0]  # target above the face: looking up
+    cols = ["day01/0001.jpg", 800, 400, *landmarks, 0, 0, 0, 0, 0, 600, *face_centre, *target, "right"]
+    (subj / "p03.txt").write_text(" ".join(str(c) for c in cols) + "\n")
+    ds = GazeShardDataset(pack_mpiifacegaze(str(tmp_path / "raw"), str(tmp_path / "shards")))
+    assert len(ds) == 1 and ds.subjects() == [3]
+    pitch, yaw = ds.raw(0)["gaze"]
+    assert pitch > 0.1 and abs(yaw) < 1e-3
+
+
 def test_face_stream_init_from_safetensors(tmp_path) -> None:
     import torchvision
     from safetensors.torch import save_file

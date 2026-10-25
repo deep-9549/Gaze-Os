@@ -51,7 +51,7 @@ def pack_mpiifacegaze(root: str, out_dir: str) -> list[Path]:
             if img is None:
                 continue
             img = cv2.cvtColor(cv2.undistort(img, K.matrix, K.dist), cv2.COLOR_BGR2RGB)
-            vals = np.asarray(parts[1:], float)
+            vals = np.asarray(parts[1:27], float)  # the last column names the evaluation eye ("left"/"right")
             lm = vals[2:14].reshape(6, 2)  # 4 eye corners, 2 mouth corners
             rvec = vals[14:17]  # head translation (vals[17:20]) is not needed: fc gives the face centre
             fc, gt = vals[20:23], vals[23:26]
