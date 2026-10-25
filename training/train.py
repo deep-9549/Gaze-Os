@@ -11,6 +11,7 @@ Git commit are saved with the checkpoint (PRD 16.3).
 
 from __future__ import annotations
 
+import glob
 import json
 import logging
 import math
@@ -54,6 +55,24 @@ def build_model(cfg: Any) -> GazeNetGOS:
     )
 
 
+def load_face_weights(model: GazeNetGOS, path: str) -> None:
+    """Initialize the face stream from a backbone trained elsewhere, e.g. the ETH-XGaze
+    ResNet-18 (docs/PLAN.md section 2). Its own output layer (`fc`) is dropped."""
+    if path.endswith(".safetensors"):
+        from safetensors.torch import load_file
+
+        state = load_file(path)
+    else:
+        state = torch.load(path, map_location="cpu")
+        state = state.get("model", state)
+    state = {k.removeprefix("module.").removeprefix("model."): v for k, v in state.items()}
+    state = {k: v for k, v in state.items() if not k.startswith("fc.")}
+    missing, unexpected = model.face.load_state_dict(state, strict=False)
+    if missing or unexpected:
+        raise ValueError(f"{path} does not fit the face stream: missing {missing[:3]}, unexpected {unexpected[:3]}")
+    log.info("face stream initialized from %s", path)
+
+
 def param_groups(model: GazeNetGOS, lr_backbone: float, lr_new: float, weight_decay: float) -> list[dict[str, Any]]:
     backbone = list(model.face.parameters()) if model.use_face else []
     ids = {id(p) for p in backbone}
@@ -89,11 +108,13 @@ def split_subjects(all_subjects: list[int], cfg: Any) -> tuple[list[int], list[i
 
 
 def make_loaders(cfg: Any) -> tuple[DataLoader, DataLoader | None, DataLoader | None, dict[str, list[int]]]:
-    paths = sorted(str(p) for pattern in cfg.data.shards for p in Path().glob(pattern))
+    # glob.glob, not Path().glob: shards may live on another drive (absolute patterns).
+    paths = sorted({p for pattern in cfg.data.shards for p in glob.glob(str(pattern))})
     if not paths:
         raise FileNotFoundError(f"no shards match {list(cfg.data.shards)}")
     probe = GazeShardDataset(paths)
-    train_s, val_s, test_s = split_subjects(probe.subjects(), cfg)
+    excluded = set(cfg.data.get("exclude_subjects") or [])  # e.g. held out for a cross-dataset test
+    train_s, val_s, test_s = split_subjects([s for s in probe.subjects() if s not in excluded], cfg)
     aug = GazeAugment(seed=cfg.seed) if cfg.data.augment else None
     train_ds = GazeShardDataset(paths, subjects=train_s, transform=aug, stride=cfg.data.stride)
     kw = {"batch_size": cfg.train.batch_size, "num_workers": cfg.data.workers, "pin_memory": torch.cuda.is_available()}
@@ -131,6 +152,8 @@ def train(cfg: Any) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     train_dl, val_dl, test_dl, split = make_loaders(cfg)
     model = build_model(cfg).to(device)
+    if cfg.get("init_face_checkpoint"):
+        load_face_weights(model, cfg.init_face_checkpoint)
     if cfg.get("init_checkpoint"):
         state = torch.load(cfg.init_checkpoint, map_location="cpu")
         missing, unexpected = model.load_state_dict(state["model"], strict=False)
@@ -144,7 +167,18 @@ def train(cfg: Any) -> dict[str, Any]:
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     writer = _writer(cfg, out_dir)
     best, best_epoch, history = math.inf, -1, []
-    for epoch in range(t.epochs):
+    start, last = 0, out_dir / "last.pt"
+    if t.get("resume") and last.exists():  # continue after a Colab/Kaggle disconnect
+        ck = torch.load(last, map_location=device)
+        model.load_state_dict(ck["model"])
+        opt.load_state_dict(ck["optimizer"])
+        sched.load_state_dict(ck["scheduler"])
+        if use_amp and ck["scaler"]:
+            scaler.load_state_dict(ck["scaler"])
+        best, best_epoch, history = ck["best"], ck["best_epoch"], ck["history"]
+        start = t.epochs if ck["stopped"] else ck["epoch"] + 1
+        log.info("resumed from %s at epoch %d", last, start)
+    for epoch in range(start, t.epochs):
         model.train()
         t0, running, n = time.time(), 0.0, 0
         for b in train_dl:
@@ -173,11 +207,15 @@ def train(cfg: Any) -> dict[str, Any]:
             writer.add_scalar("train/loss", metrics["train_loss"], epoch)
             if "val" in metrics:
                 writer.add_scalar("val/mean_error_deg", score, epoch)
+        stop = score >= best and epoch - best_epoch >= t.patience  # early stopping on validation error
         if score < best:
             best, best_epoch = score, epoch
             torch.save({"model": model.state_dict(), "config": _plain(cfg), "epoch": epoch, "commit": git_commit()},
                        out_dir / "best.pt")
-        elif epoch - best_epoch >= t.patience:  # early stopping on validation error
+        torch.save({"model": model.state_dict(), "optimizer": opt.state_dict(), "scheduler": sched.state_dict(),
+                    "scaler": scaler.state_dict(), "epoch": epoch, "best": best, "best_epoch": best_epoch,
+                    "history": history, "stopped": stop}, last)
+        if stop:
             log.info("early stop at epoch %d (best %d)", epoch, best_epoch)
             break
     state = torch.load(out_dir / "best.pt", map_location=device)

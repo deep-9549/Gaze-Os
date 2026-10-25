@@ -1,0 +1,7 @@
+# @package _global_
+# Stage A without ETH-XGaze (docs/PLAN.md, arm c): M3 pre-training on RT-GENE.
+# s014-s016 (ids 2014-2016) are held out as a cross-dataset test set.
+# On the 4 GB laptop GPU add train.batch_size=64.
+model: {backbone: resnet18}
+data: {shards: [data/shards/rtgene/*.h5], fold: null, val_fraction: 0.1, exclude_subjects: [2014, 2015, 2016]}
+train: {epochs: 15, batch_size: 128}

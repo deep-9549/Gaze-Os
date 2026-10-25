@@ -1,10 +1,11 @@
 """Convert the official L2CS-Net weights (M1 baseline) to the GazeOS ONNX contract.
 
-Download `L2CSNet_gaze360.pkl` or the MPIIGaze fold weights from the L2CS-Net
-repository (https://github.com/Ahmednull/L2CS-Net), then:
+The official Google Drive link in the L2CS-Net README
+(https://github.com/Ahmednull/L2CS-Net) is dead; the Gaze360 weights are mirrored
+as safetensors at https://huggingface.co/py-feat/l2cs. Then:
 
+    python -m training.convert_l2cs data/weights/l2cs/l2cs_gaze360_resnet50.safetensors models/l2cs_gaze360.onnx --dataset gaze360
     python -m training.convert_l2cs L2CSNet_mpiigaze.pkl models/l2cs_mpii.onnx --dataset mpiigaze
-    python -m training.convert_l2cs L2CSNet_gaze360.pkl  models/l2cs_gaze360.onnx --dataset gaze360
 
 L2CS returns (yaw, pitch) logits; the angle is sum(softmax * index) * width + offset:
 MPIIGaze 28 bins of 3 degrees from -42, Gaze360 90 bins of 4 degrees from -180.
@@ -45,8 +46,13 @@ def convert(weights: str, out: str, dataset: str) -> None:
 
     bins, width, start = SPECS[dataset]
     model = L2CS(bins)
-    state = torch.load(weights, map_location="cpu")
-    state = state.get("model_state_dict", state)
+    if weights.endswith(".safetensors"):  # e.g. the py-feat/l2cs mirror of the Gaze360 weights
+        from safetensors.torch import load_file
+
+        state = load_file(weights)
+    else:
+        state = torch.load(weights, map_location="cpu")
+        state = state.get("model_state_dict", state)
     state = {k.removeprefix("module."): v for k, v in state.items()}
     missing, unexpected = model.load_state_dict(state, strict=False)
     if [m for m in missing if not m.startswith("fc_finetune")]:

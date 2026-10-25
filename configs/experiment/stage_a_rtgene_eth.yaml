@@ -1,0 +1,7 @@
+# @package _global_
+# Stage A without ETH-XGaze (docs/PLAN.md, arm d): RT-GENE pre-training starting from
+# the ETH-XGaze-trained ResNet-18 face stream instead of ImageNet.
+init_face_checkpoint: data/weights/eth-xgaze-resnet18/model.safetensors
+model: {backbone: resnet18}
+data: {shards: [data/shards/rtgene/*.h5], fold: null, val_fraction: 0.1, exclude_subjects: [2014, 2015, 2016]}
+train: {epochs: 15, batch_size: 128}

@@ -115,6 +115,113 @@ def test_l2cs_conversion_contract(tmp_path) -> None:
     assert est.face_size == 448 and np.isclose(est.centers[0], -42.0) and len(est.centers) == 28
 
 
+def _fake_rtgene_tar(path, frames: dict[int, tuple[float, float, float, float]], missing_left: set[int]) -> None:
+    """A tiny RT-GENE-style archive: images first, labels last, plus files the packer must ignore."""
+    import io
+    import tarfile
+
+    import cv2
+
+    def add(t, name: str, data: bytes) -> None:
+        info = tarfile.TarInfo(name)
+        info.size = len(data)
+        t.addfile(info, io.BytesIO(data))
+
+    def png(img) -> bytes:
+        return cv2.imencode(".png", img)[1].tobytes()
+
+    rng = np.random.default_rng(0)
+    root = path.stem
+    with tarfile.open(path, "w") as t:
+        for side in ("left", "right"):
+            for fid in frames:
+                if side == "left" and fid in missing_left:
+                    continue
+                eye = rng.integers(0, 255, (36, 60, 3), dtype=np.uint8)
+                eye[:, :30] //= 4  # asymmetric, so a mirror is detectable
+                add(t, f"{root}/inpainted/{side}/{side}_{fid:06d}_rgb.png", png(eye))
+        for fid in frames:
+            add(t, f"{root}/original/face/face_{fid:06d}_rgb.png", png(np.zeros((224, 224, 3), np.uint8)))
+            add(t, f"{root}/inpainted/face/face_{fid:06d}_rgb.png",
+                png(rng.integers(0, 255, (224, 224, 3), dtype=np.uint8)))
+        lines = [f"{fid}, [{v[0]}, {v[1]}], [{v[2]}, {v[3]}], 1502457728.46" for fid, v in frames.items()]
+        add(t, f"{root}/label_combined.txt", "\n".join(lines).encode())
+
+
+def test_rtgene_packer(tmp_path) -> None:
+    import tarfile
+
+    import cv2
+
+    from gazeos.vision.enhance import apply_clahe
+    from training.data.packers import pack_rtgene
+
+    frames = {2: (0.1, -0.3, -0.2, 0.05), 3: (0.0, 0.0, 1.0, 0.0), 4: (0.0, 0.0, 0.1, 0.1), 7: (-0.2, 0.1, 0.3, -0.25)}
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    tar = raw / "s012_glasses.tar"
+    _fake_rtgene_tar(tar, frames, missing_left={4})
+    paths = pack_rtgene(str(raw), str(tmp_path / "shards"))
+    ds = GazeShardDataset(paths)
+    assert len(ds) == 2 and ds.subjects() == [2012]  # frame 3 out of range, frame 4 incomplete
+    by_gaze = {round(float(ds.raw(i)["gaze"][0]), 3): ds.raw(i) for i in range(2)}
+    s = by_gaze[0.05]
+    # Labels are [yaw, pitch]: shards store (pitch, yaw) for gaze and (pitch, yaw, 0) for head.
+    assert np.allclose(s["gaze"], [0.05, -0.2]) and np.allclose(s["head"], [-0.3, 0.1, 0.0])
+    with tarfile.open(tar) as t:
+        left = t.extractfile("s012_glasses/inpainted/left/left_000002_rgb.png").read()  # type: ignore[union-attr]
+    expected = apply_clahe(np.ascontiguousarray(cv2.flip(cv2.imdecode(np.frombuffer(left, np.uint8), 0), 1)))
+    assert np.array_equal(s["left_eye"], expected)  # the subject's left eye, mirrored
+
+
+def test_face_stream_init_from_safetensors(tmp_path) -> None:
+    import torchvision
+    from safetensors.torch import save_file
+
+    from training.train import load_face_weights
+
+    eth = torchvision.models.resnet18(weights=None)
+    eth.fc = torch.nn.Linear(512, 2)  # the ETH-XGaze model's pitch/yaw output, which is dropped
+    path = str(tmp_path / "eth.safetensors")
+    save_file({k: v.contiguous() for k, v in eth.state_dict().items()}, path)
+    m = GazeNetGOS("resnet18", pretrained=False)
+    load_face_weights(m, path)
+    assert torch.equal(m.face.conv1.weight, eth.conv1.weight)
+    with pytest.raises(ValueError):
+        load_face_weights(GazeNetGOS("mobilenet_v3_small", pretrained=False), path)
+
+
+def test_l2cs_conversion_from_safetensors(tmp_path) -> None:
+    from safetensors.torch import save_file
+
+    from gazeos.inference.gaze import OnnxGazeEstimator
+    from training.convert_l2cs import L2CS, convert
+
+    ckpt = str(tmp_path / "l2cs.safetensors")
+    save_file({k: v.contiguous() for k, v in L2CS(90).state_dict().items()}, ckpt)
+    out = str(tmp_path / "l2cs.onnx")
+    convert(ckpt, out, "gaze360")
+    assert len(OnnxGazeEstimator(out).centers) == 90
+
+
+def test_train_resumes_and_reads_absolute_shard_paths(tmp_path) -> None:
+    from pathlib import Path
+
+    from hydra import compose, initialize_config_dir
+
+    from training.train import train
+
+    pack_synthetic(str(tmp_path / "shards"), subjects=3, per_subject=8)
+    overrides = ["experiment=smoke_synthetic", f"data.shards=[{(tmp_path / 'shards').as_posix()}/*.h5]",
+                 f"output_dir={(tmp_path / 'run').as_posix()}", "data.val_fraction=0.5", "train.batch_size=4"]
+    config_dir = str((Path(__file__).parents[1] / "configs").resolve())
+    with initialize_config_dir(config_dir=config_dir, version_base="1.3"):
+        first = train(compose("train", overrides=[*overrides, "train.epochs=1"]))
+        resumed = train(compose("train", overrides=[*overrides, "train.epochs=2", "train.resume=true"]))
+    assert [h["epoch"] for h in first["history"]] == [0]
+    assert [h["epoch"] for h in resumed["history"]] == [0, 1]  # epoch 0 was not repeated
+
+
 def test_gesture_training_smoke(tmp_path) -> None:
     from gazeos.inference.gesture import OnnxGestureClassifier
     from training.train_gesture import export, synthetic_sessions, train
