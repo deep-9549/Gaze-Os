@@ -29,4 +29,4 @@ models/face_landmarker.task
 # Generated locally; real results are written up in the report.
 results/
 figures/
-models/smoke_*
+models/smoke*
