@@ -117,7 +117,10 @@ def make_loaders(cfg: Any) -> tuple[DataLoader, DataLoader | None, DataLoader | 
     train_s, val_s, test_s = split_subjects([s for s in probe.subjects() if s not in excluded], cfg)
     aug = GazeAugment(seed=cfg.seed) if cfg.data.augment else None
     train_ds = GazeShardDataset(paths, subjects=train_s, transform=aug, stride=cfg.data.stride)
-    kw = {"batch_size": cfg.train.batch_size, "num_workers": cfg.data.workers, "pin_memory": torch.cuda.is_available()}
+    # Persistent workers: on Windows each worker re-imports torch and cv2 when it starts,
+    # which left the GPU idle for 20-40 s at every epoch and validation pass.
+    kw = {"batch_size": cfg.train.batch_size, "num_workers": cfg.data.workers, "pin_memory": torch.cuda.is_available(),
+          "persistent_workers": cfg.data.workers > 0}
     train_dl = DataLoader(train_ds, shuffle=True, drop_last=len(train_ds) > cfg.train.batch_size, **kw)
     val_dl = DataLoader(GazeShardDataset(paths, subjects=val_s), **kw) if val_s else None
     test_dl = DataLoader(GazeShardDataset(paths, subjects=test_s), **kw) if test_s else None
