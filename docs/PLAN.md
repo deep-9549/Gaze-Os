@@ -148,6 +148,30 @@ uv pip install --python .venv -e ".[app,train,research,dev]"
 | 24 | Ethics approval, then GazeOS-Webcam collection (E6, E9, Stage D) | Waiting (approval) |
 | 25 | Gesture dataset (E10), language-model corpora (E11), user study | To do |
 
+### Final week (27 Oct - 2 Nov 2026, solo)
+
+Solo project (PRD 25 solo scope): P5 meta-learning (Stage D) and the GRU gesture model
+(B2) are dropped; the 15-20 person user study is likely future work. Friends may record
+pilot data once they have signed the consent form (`docs/study/`) and the guide has said
+whether formal ethics approval is needed; the user recording themselves needs nothing.
+
+| Day | Work | Needs the user | Status |
+| --- | --- | --- | --- |
+| 1 | Reboot; seeds 1-2 summary (E1 mean ± SD) and a 3-seed offline ensemble row; latency profile + 10-min soak; first `gazeos --dry-run` on the webcam and fixes | About 30 min | To do |
+| 1-2 | Pilot GazeOS-Webcam data: `tools/collect.py`, 3 sessions of about 15 min per person (user, then friends with consent) | About 1 h | To do |
+| 2-3 | E6 personalization on the pilot data: P0-P4 with 1/3/5/9/16 points (the PRD 2° target) | No | To do |
+| 2 (night) | E2 and E3 ablations on folds 0-2 (about 6 GPU h) | No | To do |
+| 3 | E7 filters, E12 uncertainty, E8 speed/accuracy: run the existing runners, make figures | No | To do |
+| 3-4 | Gestures (E10): record with `tools/label_gestures.py`, train TCN (B1), compare with rules (B0) | About 30 min | To do |
+| 4-5 | Typing (E11): corpora, n-gram and small transformer, keystroke savings | No | To do |
+| 5 | Optional: pursuit calibration, tested on the pilot data | No | To do |
+| 6 | Windows hardware checks (DPI scaling, focus, UI Automation, TTS); installer build | About 1 h | To do |
+| 7 | Figures, results tables, model cards, report material; buffer | No | To do |
+
+Out of scope this week (report as limitations or future work): the user study, fairness
+breakdowns (need its data), Gaze360 cross-dataset (no access), P2 features (FR-08, FR-31,
+FR-32).
+
 ### Proposed: smooth-pursuit calibration in onboarding (idea, 26 Oct 2026)
 
 Add a 15-20 s moving-dot phase to onboarding, on top of today's 9 static
