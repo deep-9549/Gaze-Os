@@ -130,7 +130,7 @@ uv pip install --python .venv -e ".[app,train,research,dev]"
 
 | # | Step | Status |
 | --- | --- | --- |
-| 19 | Stage B, 15 LOSO folds x 3 seeds from the winning Stage A (E1); M0 and M1 baselines on the same folds. Target 4.5° or less | To do |
+| 19 | Stage B, 15 LOSO folds x 3 seeds from the winning Stage A (E1); M0 and M1 baselines on the same folds. Target 4.5° or less | M1 done: L2CS Gaze360 off the shelf scores 8.01° on MPIIFaceGaze (`training/eval_onnx.py`, every 10th sample, `outputs/baselines/`); published MPIIGaze-trained L2CS 3.92°. Seed 0 folds waiting on Phase 4 |
 | 20 | Deployment model on all 15 subjects (`data.fold=null`) | To do |
 | 21 | Ablations E2, E3, E12 on MPII | To do |
 
