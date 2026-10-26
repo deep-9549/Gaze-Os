@@ -19,7 +19,7 @@ non-commercial research data and stays local (`models/` is git-ignored for it).
 | Metric | Value | Data |
 | --- | --- | --- |
 | Mean angular error, held-out subjects (mean of subjects) | 3.66° (p06 2.67°, p13 4.64°); teacher M3 3.65° | MPIIFaceGaze p06 + p13, all 4,375 images, through the app's ONNX runtime wrapper |
-| Mean angular error, leave-one-subject-out (the benchmark, E1) | 4.83° ± 1.26° over subjects, seed 0, M3 (seeds 1-2 pending) | MPIIFaceGaze, 15 folds |
+| Mean angular error, leave-one-subject-out (the benchmark, E1) | M3: 4.78° ± 0.09° over 3 seeds (seed means 4.83, 4.84, 4.68°; SD over subjects about 1.3°); 3-seed ensemble 4.65° | MPIIFaceGaze, 15 folds |
 | After 9-point calibration | not measured yet (needs GazeOS-Webcam) | |
 | Parity vs PyTorch | M3 3.9e-6° mean (limit 0.05°) | 1,000 images of p06 |
 | CPU latency, model only | 2.02 ms/frame (ONNX Runtime, fp32) | laptop CPU, 1,000 images; full pipeline profile pending |

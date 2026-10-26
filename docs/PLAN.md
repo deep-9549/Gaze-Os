@@ -130,7 +130,7 @@ uv pip install --python .venv -e ".[app,train,research,dev]"
 
 | # | Step | Status |
 | --- | --- | --- |
-| 19 | Stage B, 15 LOSO folds x 3 seeds from the winning Stage A (E1); M0 and M1 baselines on the same folds. Target 4.5° or less | M1 done: L2CS Gaze360 off the shelf scores 8.01° on MPIIFaceGaze (`training/eval_onnx.py`, every 10th sample, `outputs/baselines/`); published MPIIGaze-trained L2CS 3.92°. Seed 0 done (arm d, 15 folds): **mean 4.83°**, SD 1.26° over subjects, median 4.62°, best 3.22° (p00), worst 6.82° (p03); 7/15 under 4.5°. Target 4.5° missed by 0.33°. Per fold: 3.22, 3.40, 5.64, 6.82, 3.85, 3.86, 3.43, 5.01, 4.22, 4.28, 6.52, 6.25, 4.74, 4.62, 6.68. Seeds 1-2 running overnight |
+| 19 | Stage B, 15 LOSO folds x 3 seeds from the winning Stage A (E1); M0 and M1 baselines on the same folds. Target 4.5° or less | M1 done: L2CS Gaze360 off the shelf scores 8.01° on MPIIFaceGaze (`training/eval_onnx.py`, every 10th sample, `outputs/baselines/`); published MPIIGaze-trained L2CS 3.92°. Seed 0 done (arm d, 15 folds): **mean 4.83°**, SD 1.26° over subjects, median 4.62°, best 3.22° (p00), worst 6.82° (p03); 7/15 under 4.5°. Target 4.5° missed by 0.33°. Per fold: 3.22, 3.40, 5.64, 6.82, 3.85, 3.86, 3.43, 5.01, 4.22, 4.28, 6.52, 6.25, 4.74, 4.62, 6.68. **3 seeds done (27 Oct): 4.78° ± 0.09°** (mean ± SD of the seed means 4.83, 4.84, 4.68°; Stage A shared, Stage B and its validation subjects vary by seed). **3-seed ensemble (average of predicted angles): 4.65°**, SD 1.38° over subjects, median 4.66°, 7/15 under 4.5°. Per fold (ensemble): 2.45, 2.99, 5.84, 6.92, 3.56, 3.72, 3.01, 5.06, 4.29, 3.97, 6.06, 6.06, 4.81, 4.66, 6.38. Results in `D:\GazeOS-cache\outputs\arms\d_eth_rtgene\e1_*.json` with the script |
 | 20 | Deployment model on all 15 subjects (`data.fold=null`) | To do |
 | 21 | Ablations E2, E3, E12 on MPII | To do |
 
@@ -157,7 +157,7 @@ whether formal ethics approval is needed; the user recording themselves needs no
 
 | Day | Work | Needs the user | Status |
 | --- | --- | --- | --- |
-| 1 | Reboot; seeds 1-2 summary (E1 mean ± SD) and a 3-seed offline ensemble row; latency profile + 10-min soak; first `gazeos --dry-run` on the webcam and fixes | About 30 min | To do |
+| 1 | Reboot; seeds 1-2 summary (E1 mean ± SD) and a 3-seed offline ensemble row; latency profile + 10-min soak; first `gazeos --dry-run` on the webcam and fixes | About 30 min | Seeds and ensemble done (05:30): 4.78° ± 0.09°, ensemble 4.65°. Rest to do |
 | 1-2 | Pilot GazeOS-Webcam data: `tools/collect.py`, 3 sessions of about 15 min per person (user, then friends with consent) | About 1 h | To do |
 | 2-3 | E6 personalization on the pilot data: P0-P4 with 1/3/5/9/16 points (the PRD 2° target) | No | To do |
 | 2 (night) | E2 and E3 ablations on folds 0-2 (about 6 GPU h) | No | To do |
@@ -200,6 +200,7 @@ clustered at 9 points.
 
 | Date | Change |
 | --- | --- |
+| 2026-10-27 | Seeds 1-2 finished at 05:08 (30 runs, no failures; seed means 4.84° and 4.68°). E1: 4.78° ± 0.09° over 3 seeds; 3-seed ensemble 4.65°. Both still above the 4.5° target; seed-to-seed spread (0.09°) is much smaller than fold-to-fold spread (1.3°), so the subjects, not the seeds, drive the number. |
 | 2026-10-25 | Plan written. Data audit of `F:\GazeOS-data`: MPIIFaceGaze 4 of 15 subjects; RT-GENE s004 truncated, s005 and s006 missing. RT-GENE label order verified. Google Drive (5 TB) added for shards and checkpoints. |
 | 2026-10-26 | Phase 0 done. MediaPipe resolved to 1.1.1 (newer than the code was written against); the unit tests pass, but check landmarks on a live webcam with `gazeos --dry-run`. Synthetic shards take about 190 KB per sample, so expect roughly 10-20 GB for RT-GENE. |
 | 2026-10-26 | Steps 4 and 5 done: MPIIFaceGaze complete (15 subjects, 37,667 images); RT-GENE complete (17 subjects, about 114,600 frames). |
