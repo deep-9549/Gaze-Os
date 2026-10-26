@@ -23,13 +23,14 @@ from gazeos.vision.geometry import angular_error_deg
 from gazeos.vision.normalization import NormalizationResult
 
 
-def evaluate_onnx(model: str, pattern: str, every: int = 1, threads: int = 4) -> dict[str, Any]:
+def evaluate_onnx(model: str, pattern: str | list[str], every: int = 1, threads: int = 4) -> dict[str, Any]:
     import h5py
 
+    patterns = [pattern] if isinstance(pattern, str) else pattern
     est = OnnxGazeEstimator(model, threads=threads)
     errors: dict[int, list[float]] = {}
     pairs = []
-    for path in sorted(glob.glob(pattern)):
+    for path in sorted({p for pat in patterns for p in glob.glob(pat)}):
         with h5py.File(path, "r") as f:
             for i in range(0, len(f["gaze"]), every):
                 norm = NormalizationResult(face=f["face"][i], right_eye=f["right_eye"][i], left_eye=f["left_eye"][i],
@@ -51,7 +52,7 @@ def evaluate_onnx(model: str, pattern: str, every: int = 1, threads: int = 4) ->
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("model")
-    ap.add_argument("shards", help="glob of shard files")
+    ap.add_argument("shards", nargs="+", help="one or more globs of shard files")
     ap.add_argument("--every", type=int, default=1, help="use every n-th sample")
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--out", help="write the report as JSON here")
