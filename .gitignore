@@ -25,6 +25,11 @@ recordings/
 *.hdf5
 # Model files are tracked with Git LFS (see .gitattributes); the MediaPipe task file is downloaded.
 models/face_landmarker.task
+# Gaze models trained on non-commercial research data (MPIIFaceGaze, RT-GENE, ETH-XGaze-trained
+# weights) and converted third-party weights (L2CS) are never published: the repository is public.
+models/gazenet_*.onnx
+models/l2cs_*.onnx
+models/meta_init.npz
 
 # Generated locally; real results are written up in the report.
 results/
