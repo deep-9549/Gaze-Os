@@ -124,7 +124,7 @@ uv pip install --python .venv -e ".[app,train,research,dev]"
 
 | # | Step | Status |
 | --- | --- | --- |
-| 18 | MPII folds 0-2, compare: (a) ImageNet only, (b) ETH-XGaze face weights, (c) RT-GENE pre-training, (d) ETH weights then RT-GENE, (e) optional GazeGene. Keep RT-GENE s014-s016 out of pre-training as a cross-dataset test | To do |
+| 18 | MPII folds 0-2, compare: (a) ImageNet only, (b) ETH-XGaze face weights, (c) RT-GENE pre-training, (d) ETH weights then RT-GENE, (e) optional GazeGene. Keep RT-GENE s014-s016 out of pre-training as a cross-dataset test | Done. Mean test error: a 4.29°, b 4.67°, c 4.77°, **d 4.04°** (per fold in REVIEW.md item 6). d wins by the pre-registered rule, but 3 folds cannot separate the arms reliably. Both Stage A runs early-stopped at epoch 7 (best epoch 2, val 5.08° on one RT-GENE subject). (e) skipped |
 
 ### Phase 5: benchmark and deployment model
 
@@ -180,6 +180,7 @@ clustered at 9 points.
 | 2026-10-26 | Phase 0 done. MediaPipe resolved to 1.1.1 (newer than the code was written against); the unit tests pass, but check landmarks on a live webcam with `gazeos --dry-run`. Synthetic shards take about 190 KB per sample, so expect roughly 10-20 GB for RT-GENE. |
 | 2026-10-26 | Steps 4 and 5 done: MPIIFaceGaze complete (15 subjects, 37,667 images); RT-GENE complete (17 subjects, about 114,600 frames). |
 | 2026-10-26 | Step 6 done: L2CS Gaze360 (py-feat mirror) and ETH-XGaze ResNet-18 weights in `weights/`, both checked against the models they load into. GazeGene deferred until Phase 4 shows whether more pre-training helps. |
+| 2026-10-26 | Phase 4 done at 10:43; arm d (ETH-XGaze weights + RT-GENE) chosen by the pre-registered rule. Phase 5 started: arm d on all 15 folds, then the deployment model. |
 | 2026-10-26 | Phase 4 fold 0: a ImageNet 3.15°, b ETH weights 2.86°, c RT-GENE 2.69°, d ETH + RT-GENE 2.70° (test subject p00). Shards copied to the Drive folder (18.4 GB). Training memory fixed (persistent training workers, no validation workers, 4 workers) after the page file on C: grew to 18 GB. |
 | 2026-10-26 | Phase 3 steps 15-16 done (results in the table). Training speed fixed: shards copied to the NVMe SSD and rechunked; the loader went from 62 to 464 img/s. Phase 4 started on the laptop GPU. |
 | 2026-10-26 | Phase 2 done on branch `feature/no-ethxgaze-pipeline`. Google Drive access for step 17 goes through Google Drive for desktop (a local synced folder); the Drive folder must stay Restricted. Packing started. |
