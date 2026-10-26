@@ -65,7 +65,7 @@ on it; model cards must say so.
 
 | Where | What |
 | --- | --- |
-| Laptop (RTX 3050, 4 GB) | Packing, debugging, smoke runs, Stage A arm selection on folds 0-2, export, INT8, latency profiling (the CPU targets are measured here). Batch 64, mixed precision on |
+| Laptop (RTX 3050, 4 GB) | Packing, debugging, smoke runs, Stage A arm selection on folds 0-2, export, INT8, latency profiling (the CPU targets are measured here). Train from the SSD copy `D:\GazeOS-cache\shards` (F: is a USB hard drive: about 25 img/s from it) with `data.workers=4`. M3 at batch 64 with AMP peaks at 1.1 GB of GPU memory, so the default batch 128 fits. RAM is the tighter limit (15.7 GB): each Windows loader worker commits about 1.5 GB and the training process about 8 GB, so 6 persistent workers pushed commit past RAM, Windows paged, and the page file on C: grew to 18 GB. Validation and test therefore load in the main process, and 4 training workers is the default |
 | Colab + Google Drive (5 TB) | Long runs. Shards live on Drive; copy them to `/content` at session start (HDF5 over the Drive mount is slow); write checkpoints to Drive every epoch |
 | Kaggle | Extra free GPU time (about 30 h/week, 12 h sessions) in parallel with Colab; pull shards with `gdown`/`rclone` or a private Kaggle dataset |
 
@@ -116,9 +116,9 @@ uv pip install --python .venv -e ".[app,train,research,dev]"
 
 | # | Step | Status |
 | --- | --- | --- |
-| 15 | Pack MPIIFaceGaze (15 subjects) and RT-GENE into `data/shards/` | In progress |
-| 16 | Checks: image grid with gaze arrows; RT-GENE vs MPII head-pose spread (head signs); an MPII-trained model on RT-GENE has positive per-axis correlation | To do |
-| 17 | Copy shards to `G:\My Drive\Minor Project\GazeOS\data\shards` (Drive for desktop uploads them) | In progress: layout created, both weight files copied; shards follow step 16 |
+| 15 | Pack MPIIFaceGaze (15 subjects) and RT-GENE into `data/shards/` | Done: MPIIFaceGaze 37,667 samples (4.8 GB, 74 min); RT-GENE 114,288 samples (13.6 GB, 171 min; 333 frames beyond ±42° dropped). Fixed a packer bug on the way (real MPII lines have a 28th, non-numeric column). Shards rechunked to one sample per image chunk (36x faster random reads) |
+| 16 | Checks: image grid with gaze arrows; RT-GENE vs MPII head-pose spread (head signs); an MPII-trained model on RT-GENE has positive per-axis correlation | Done (`tools/inspect_shards.py`). A 3-epoch MPII model reaches 3.89° on 2 held-out subjects. On RT-GENE its predictions correlate with the labels for 16 of 17 subjects (pitch +0.46 to +0.81, yaw +0.37 to +0.81), so gaze signs are right; head-gaze correlations are positive in both datasets, so head signs are right. **s003 fails** (pitch -0.01, yaw -0.30): its labels look normal but its inpainted eyes are badly degraded, so it is excluded from Stage A |
+| 17 | Copy shards to `G:\My Drive\Minor Project\GazeOS\data\shards` (Drive for desktop uploads them) | Done: 34 files, 18.4 GB copied (rechunked versions); Drive's cache is on D: |
 
 ### Phase 4: replacement Stage A (new E5)
 
@@ -148,6 +148,25 @@ uv pip install --python .venv -e ".[app,train,research,dev]"
 | 24 | Ethics approval, then GazeOS-Webcam collection (E6, E9, Stage D) | Waiting (approval) |
 | 25 | Gesture dataset (E10), language-model corpora (E11), user study | To do |
 
+### Proposed: smooth-pursuit calibration in onboarding (idea, 26 Oct 2026)
+
+Add a 15-20 s moving-dot phase to onboarding, on top of today's 9 static
+shrinking dots (`gazeos/calibration/protocol.py`), which give about 270 samples
+clustered at 9 points.
+
+- Why: hundreds of samples spread over the whole screen (P3 and P4 benefit most);
+  quicker and less tiring than 9 jumps; a new experiment for the report (static
+  vs pursuit vs both: error against calibration time, an E6 extension).
+- Care needed: the eye lags the dot by about 50-150 ms and makes catch-up
+  saccades, so estimate each user's lag by cross-correlating gaze with the dot
+  path and drop saccade samples (I-VT detector); dot speed about 5-10°/s; average
+  per path segment before P3 (ADR 0002); keep static 9-point as the fallback for
+  users who cannot follow smoothly (nystagmus, late-stage ALS).
+- `tools/collect.py` already records a 30 s pursuit phase with per-frame
+  timestamps and dot positions, so GazeOS-Webcam data can evaluate this offline
+  once collected; confirm lag-corrected labels can be recomputed from what it stores.
+- Effort: about 1-2 days. Status: To do, after Phase 6.
+
 ## 5. Open decisions
 
 - Team size (HANDOFF section 6). Solo: drop arm (e) and Stage D.
@@ -161,4 +180,6 @@ uv pip install --python .venv -e ".[app,train,research,dev]"
 | 2026-10-26 | Phase 0 done. MediaPipe resolved to 1.1.1 (newer than the code was written against); the unit tests pass, but check landmarks on a live webcam with `gazeos --dry-run`. Synthetic shards take about 190 KB per sample, so expect roughly 10-20 GB for RT-GENE. |
 | 2026-10-26 | Steps 4 and 5 done: MPIIFaceGaze complete (15 subjects, 37,667 images); RT-GENE complete (17 subjects, about 114,600 frames). |
 | 2026-10-26 | Step 6 done: L2CS Gaze360 (py-feat mirror) and ETH-XGaze ResNet-18 weights in `weights/`, both checked against the models they load into. GazeGene deferred until Phase 4 shows whether more pre-training helps. |
+| 2026-10-26 | Phase 4 fold 0: a ImageNet 3.15°, b ETH weights 2.86°, c RT-GENE 2.69°, d ETH + RT-GENE 2.70° (test subject p00). Shards copied to the Drive folder (18.4 GB). Training memory fixed (persistent training workers, no validation workers, 4 workers) after the page file on C: grew to 18 GB. |
+| 2026-10-26 | Phase 3 steps 15-16 done (results in the table). Training speed fixed: shards copied to the NVMe SSD and rechunked; the loader went from 62 to 464 img/s. Phase 4 started on the laptop GPU. |
 | 2026-10-26 | Phase 2 done on branch `feature/no-ethxgaze-pipeline`. Google Drive access for step 17 goes through Google Drive for desktop (a local synced folder); the Drive folder must stay Restricted. Packing started. |
