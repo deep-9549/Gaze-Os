@@ -66,7 +66,7 @@ Upload the shards (not the raw datasets) to a private Kaggle dataset.
 
 ## 4. Real-hardware checks (any time from week 2)
 
-- [ ] Run `python -m tools.latency_profiler --seconds 60 --model models/gazenet_lite_int8.onnx` on the
+- [ ] Run `python -m tools.latency_profiler --seconds 60 --model models/gazenet_lite.onnx` on the
       reference laptop and a 10-minute `--soak`; compare against PRD 18.2.
 - [ ] Windows checks no container can do: clicks land on the right pixel at 125% and 150% display scaling;
       the keyboard and action bar never steal focus; UI Automation snapping works in a browser and in

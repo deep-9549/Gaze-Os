@@ -180,6 +180,8 @@ class Settings(_Section):
     typing: TypingSettings = Field(default_factory=TypingSettings)
     calibration: CalibrationSettings = Field(default_factory=CalibrationSettings)
     privacy: PrivacySettings = Field(default_factory=PrivacySettings)
-    gaze_model: str = "models/gazenet_lite_int8.onnx"
+    # fp32 M4: 2 ms/frame on the laptop CPU, inside the 8 ms budget; static INT8 lost 1.2° and
+    # ran slower, so it was rejected (docs/PLAN.md step 22).
+    gaze_model: str = "models/gazenet_lite.onnx"
     gesture_model: str | None = "models/gesture_tcn.onnx"
     theme: Literal["default", "high_contrast", "large_text"] = "default"
