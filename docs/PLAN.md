@@ -138,8 +138,8 @@ uv pip install --python .venv -e ".[app,train,research,dev]"
 
 | # | Step | Status |
 | --- | --- | --- |
-| 22 | Stage C distillation, ONNX export (parity < 0.05°), INT8 (rejected at a 0.2° loss); optional UniGaze-B teacher | To do |
-| 23 | Model card; `models/gazenet_lite_int8.onnx`; `gazeos --dry-run` and the latency profiler on the laptop | To do |
+| 22 | Stage C distillation, ONNX export (parity < 0.05°), INT8 (rejected at a 0.2° loss); optional UniGaze-B teacher | Done: M4 3.66° vs M3 3.65° on held-out p06 + p13 (distillation cost 0.01°); M3 parity 3.9e-6°. INT8 rejected (lost 1.2°, slower: 2.69 vs 2.02 ms/frame), so fp32 M4 ships. UniGaze teacher not tried |
+| 23 | Model card; `models/gazenet_lite.onnx`; `gazeos --dry-run` and the latency profiler on the laptop | Model card `docs/models/gazenet_lite.md`; fp32 model installed at `models/gazenet_lite.onnx` (git-ignored, public repo) and set as the default. Latency profile and `--dry-run` wait until the overnight runs finish (an idle machine) |
 
 ### Phase 7: unchanged from HANDOFF.md
 
