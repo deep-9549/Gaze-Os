@@ -161,7 +161,7 @@ whether formal ethics approval is needed; the user recording themselves needs no
 | 1-2 | Pilot GazeOS-Webcam data: `tools/collect.py`, 3 sessions of about 15 min per person (user, then friends with consent) | About 1 h | To do |
 | 2-3 | E6 personalization on the pilot data: P0-P4 with 1/3/5/9/16 points (the PRD 2° target) | No | To do |
 | 2 (night) | E2 and E3 ablations on folds 0-2 (about 6 GPU h) | No | To do |
-| 3 | E7 filters, E12 uncertainty, E8 speed/accuracy: run the existing runners, make figures | No | To do |
+| 3 | E7 filters, E12 uncertainty, E8 speed/accuracy: run the existing runners, make figures | No | To do. E12 first needs the uncertainty head trained (REVIEW.md item 11: ρ ≈ 0 in all 45 E1 runs) |
 | 3-4 | Gestures (E10): record with `tools/label_gestures.py`, train TCN (B1), compare with rules (B0) | About 30 min | To do |
 | 4-5 | Typing (E11): corpora, n-gram and small transformer, keystroke savings | No | To do |
 | 5 | Optional: pursuit calibration, tested on the pilot data | No | To do |
