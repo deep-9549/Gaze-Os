@@ -1,5 +1,10 @@
 # For your review
 
+**Answered 26 Oct, 14:35:** items 2, 3, 4 and 6 agreed. Item 1 / 9: seeds 1 and 2
+run on the laptop overnight (queued after Phase 6; Stage B varies per seed, the Stage A
+checkpoint is shared). Laptop: plugged in, sleep and hibernate already "never" on AC;
+keep the lid open (lid action could not be read). Open: items 5, 7, 8 (cable/chkdsk).
+
 Decisions and questions collected while the laptop ran unattended (26 Oct 2026,
 until 16:00). Each item says what was done in the meantime, so nothing waits on
 you unless marked **Blocked**. Newest first. The plan and its status table are
