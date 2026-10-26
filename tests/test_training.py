@@ -231,6 +231,16 @@ def test_face_stream_init_from_safetensors(tmp_path) -> None:
         load_face_weights(GazeNetGOS("mobilenet_v3_small", pretrained=False), path)
 
 
+def test_eval_onnx_reports_per_subject_error(tmp_path) -> None:
+    from training.eval_onnx import evaluate_onnx
+    from training.export_onnx import export
+
+    pack_synthetic(str(tmp_path / "s"), subjects=2, per_subject=6)
+    path = export(GazeNetGOS("mobilenet_v3_small", pretrained=False).eval(), tmp_path / "m.onnx")
+    r = evaluate_onnx(str(path), str(tmp_path / "s" / "*.h5"), every=2, threads=1)
+    assert r["n"] == 6 and set(r["per_subject_deg"]) == {0, 1} and r["mean_of_subjects_deg"] > 0
+
+
 def test_l2cs_conversion_from_safetensors(tmp_path) -> None:
     from safetensors.torch import save_file
 
