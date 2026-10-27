@@ -179,6 +179,9 @@ class CalibrationSettings(_Section):
     target_duration_s: float = 1.5
     keep_from_s: float = 0.5
     mad_threshold: float = 3.0
+    # Usable samples a dot needs (of about 30); a dot short of it is shown once more,
+    # and calibration stops rather than guess a missing area (REVIEW.md item 12).
+    min_samples_per_point: int = Field(10, ge=1)
     method: Literal["none", "offset", "polynomial", "gp", "finetune"] = "polynomial"
     implicit_enabled: bool = True
     implicit_refit_every: int = 20

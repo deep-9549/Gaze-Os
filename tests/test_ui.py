@@ -32,7 +32,7 @@ def test_calibration_window_end_to_end(qtbot, settings, geometry, intrinsics, us
     from gazeos.ui.calibration import CalibrationWindow
 
     outcomes = []
-    cal = CalibrationSettings(target_duration_s=0.3, keep_from_s=0.05)
+    cal = CalibrationSettings(target_duration_s=0.3, keep_from_s=0.05, min_samples_per_point=3)
     win = CalibrationWindow(geometry, make_personalizer("polynomial", geometry), cal, outcomes.append)
     qtbot.addWidget(win)
     win.resize(800, 600)
@@ -50,6 +50,32 @@ def test_calibration_window_end_to_end(qtbot, settings, geometry, intrinsics, us
     assert win.result.score >= 70, win.result
     win._accept()
     assert outcomes and outcomes[0].validation.score == win.result.score
+
+
+def test_calibration_repeats_a_dot_without_data_then_names_the_area(qtbot, settings, geometry, intrinsics,
+                                                                   user) -> None:
+    """A dot whose frames are all dropped (e.g. lids covering the eyes at the bottom of the
+    screen) is shown once more; if it fails again calibration stops instead of guessing."""
+    from gazeos.ui.calibration import CalibrationWindow
+
+    cal = CalibrationSettings(target_duration_s=0.3, keep_from_s=0.05, min_samples_per_point=3)
+    win = CalibrationWindow(geometry, make_personalizer("polynomial", geometry), cal, lambda o: None)
+    qtbot.addWidget(win)
+    win.resize(800, 600)
+    win.show()
+    proc = FrameProcessor(settings, geometry, intrinsics, None)
+    blind = (0.5 * geometry.width_px, 0.9 * geometry.height_px)  # bottom centre
+    win.start()
+    deadline = time.monotonic() + 20
+    while win.phase in ("calibrate", "validate") and time.monotonic() < deadline:
+        pts = win._points()
+        if 0 <= win.index < len(pts):
+            pf = proc.process_landmarks(user.look_at(*pts[win.index]), time.monotonic())
+            win.add_frame(time.monotonic(), None if pts[win.index] == blind else pf.observation, False)
+        qtbot.wait(10)
+    assert len(win.targets) == 10 and win.targets[-1] == blind  # shown once more at the end
+    assert win.phase == "failed" and win.result is None
+    assert "bottom" in win.fail_message
 
 
 def test_keyboard_types_through_gaze_targets(qtbot, predictor) -> None:

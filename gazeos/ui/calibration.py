@@ -26,6 +26,7 @@ from gazeos.calibration.protocol import (
     grid_targets,
     in_sample_window,
     quick_targets,
+    region_name,
     shuffled,
     target_radius,
     validate,
@@ -70,6 +71,7 @@ class CalibrationWindow(QWidget):
         else:
             self.targets = shuffled(grid_targets(geometry, settings.num_points))
             self.validation = validation_targets(geometry)
+        self._base_targets, self._base_validation = list(self.targets), list(self.validation)
         self.phase = "intro"
         self.index = -1
         self.shown_at = 0.0
@@ -77,6 +79,10 @@ class CalibrationWindow(QWidget):
         self.samples: list[CalibrationSample] = []
         self.val_obs: list[list[GazeObservation]] = []
         self.result: ValidationResult | None = None
+        # Dots short of usable samples are shown once more at the end; these failed twice.
+        self._retried: set[tuple[str, tuple[float, float]]] = set()
+        self.failed: list[tuple[str, tuple[float, float]]] = []
+        self.fail_message = ""
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._build_buttons()
@@ -112,7 +118,10 @@ class CalibrationWindow(QWidget):
             self.phase = "calibrate"
             self.index = -1
             self.samples.clear()
+            self.targets, self.validation = list(self._base_targets), list(self._base_validation)
             self.val_obs = [[] for _ in self.validation]
+            self._retried.clear()
+            self.failed.clear()
         self.buttons.hide()
         self._next()
         self._timer.start(16)
@@ -122,7 +131,7 @@ class CalibrationWindow(QWidget):
         self.accept_btn.hide()
         self.redo_btn.hide()
         if not self.quick:
-            self.targets = shuffled(self.targets)
+            self._base_targets = shuffled(self._base_targets)
         self.start()
 
     def _points(self) -> list[tuple[float, float]]:
@@ -130,8 +139,8 @@ class CalibrationWindow(QWidget):
 
     def _next(self) -> None:
         with self._lock:
-            if self.phase == "calibrate" and self.index >= 0:
-                self.samples.extend(filter_point_samples(self.point_samples, self.s.mad_threshold))
+            if self.phase in ("calibrate", "validate") and self.index >= 0:
+                self._close_point()
             self.point_samples = []
             self.index += 1
             if self.index >= len(self._points()):
@@ -143,6 +152,29 @@ class CalibrationWindow(QWidget):
         if self.phase == "result":
             self._timer.stop()
             self._compute_result()
+
+    def _close_point(self) -> None:
+        """Keep the finished dot's samples, or queue it once more (caller holds the lock)."""
+        target = self._points()[self.index]
+        if self.phase == "calibrate":
+            kept = filter_point_samples(self.point_samples, self.s.mad_threshold)
+            if len(kept) >= self.s.min_samples_per_point:
+                self.samples.extend(kept)
+                return
+        elif len(self.val_obs[self.index]) >= self.s.min_samples_per_point:
+            return
+        else:
+            self.val_obs[self.index] = []  # too few to score; the retry (if any) gets its own list
+        if (self.phase, target) in self._retried:
+            self.failed.append((self.phase, target))
+            return
+        self._retried.add((self.phase, target))
+        self._points().append(target)
+        if self.phase == "validate":
+            self.val_obs.append([])
+
+    def _regions(self, phase: str) -> list[str]:
+        return [region_name(t, self.geometry_) for ph, t in self.failed if ph == phase]
 
     def _tick(self) -> None:
         if time.monotonic() - self.shown_at >= self.s.target_duration_s:
@@ -177,8 +209,15 @@ class CalibrationWindow(QWidget):
             res = validate([(float(med[0]), float(med[1]))], [self.targets[0]], self.geometry_)
             self._finish(CalibrationOutcome(self.samples, self.personalizer, res, quick_offset=offset))
             return
-        if len(self.samples) < 9:
+        missing = self._regions("calibrate")
+        if missing or len(self.samples) < 9:
             self.result = None
+            self.fail_message = (
+                f"No usable eye data at the {', '.join(missing)} of the screen. If your eyes were open, "
+                "the lids may cover them when you look there: raise the screen or sit a little higher, "
+                "keep a light in front of you, then press Redo."
+                if missing else
+                "Not enough eye data was captured. Check the lighting and that your face is visible, then redo.")
             self.phase = "failed"
             self.redo_btn.show()
             self.buttons.show()
@@ -248,6 +287,9 @@ class CalibrationWindow(QWidget):
             r = self.result
             p.drawText(top, Qt.AlignmentFlag.AlignCenter,
                        f"Score {r.score} / 100   ·   mean error {r.mean_deg:.1f}° ({r.mean_cm:.1f} cm)")
+            if self._regions("validate"):
+                p.drawText(QRectF(0, 130, self.width(), 40), Qt.AlignmentFlag.AlignCenter,
+                           f"Not checked (no eye data): {', '.join(self._regions('validate'))}")
             for (tx, ty), err in zip(self.validation, r.per_point_deg, strict=False):
                 c = QPointF(tx / ratio, ty / ratio)
                 key = "ok" if err <= 2.0 else "warn" if err <= 3.5 else "bad"
@@ -256,6 +298,6 @@ class CalibrationWindow(QWidget):
                 p.drawEllipse(c, max(err * 12, 8), max(err * 12, 8))
                 p.drawText(QRectF(c.x() - 60, c.y() + 30, 120, 30), Qt.AlignmentFlag.AlignCenter, f"{err:.1f}°")
         elif self.phase == "failed":
-            p.drawText(top, Qt.AlignmentFlag.AlignCenter,
-                       "Not enough eye data was captured. Check the lighting and that your face is visible, then redo.")
+            p.drawText(top.adjusted(80, 0, -80, 60), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
+                       self.fail_message)
         p.end()
