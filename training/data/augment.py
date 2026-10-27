@@ -2,7 +2,8 @@
 
 Colour jitter, random gamma, Gaussian and motion blur, JPEG re-compression,
 shifts up to 8 px, and horizontal flip with the label mirrored (yaw negated,
-eyes swapped, head yaw and roll negated).
+eyes swapped, head yaw and roll negated). Optional: sensor noise, and a second view for
+consistency training (`TwoViews`).
 """
 
 from __future__ import annotations
@@ -23,6 +24,8 @@ class GazeAugment:
     p_flip: float = 0.5
     p_glare: float = 0.1
     max_shift: int = 8
+    p_noise: float = 0.0  # sensor noise, off by default so E1-E3 keep their recipe
+    max_noise_sd: float = 4.0
     seed: int | None = None
 
     def __post_init__(self) -> None:
@@ -86,6 +89,44 @@ class GazeAugment:
             eyes = [np.ascontiguousarray(left), np.ascontiguousarray(right)]
             gaze[1] = -gaze[1]
             head[1], head[2] = -head[1], -head[2]
+        if r.random() < self.p_noise:
+            face, eyes[0], eyes[1] = (sensor_noise(x, r, self.max_noise_sd) for x in (face, *eyes))
         s["face"], s["right_eye"], s["left_eye"] = face, eyes[0], eyes[1]
         s["gaze"], s["head"] = gaze, head
+        return s
+
+
+def sensor_noise(img: np.ndarray, rng: np.random.Generator, max_sd: float) -> np.ndarray:
+    noisy = img.astype(np.float32) + rng.normal(0.0, rng.uniform(0.0, max_sd), img.shape)
+    return np.clip(noisy, 0, 255).astype(np.uint8)
+
+
+@dataclass
+class TwoViews:
+    """The augmented sample plus a second view of it that differs the way consecutive
+    webcam frames do: new sensor noise, JPEG re-encoding and a shift of up to 2 px (the
+    landmark jitter of the crop). On the webcam such invisible changes move M3's output by
+    0.16-0.32 deg, about half the frame-to-frame change (docs/PLAN.md, 28 Oct)."""
+
+    base: GazeAugment | None = None
+    max_noise_sd: float = 4.0
+    max_shift: int = 2
+    seed: int | None = None
+
+    def __post_init__(self) -> None:
+        self.rng = np.random.default_rng(self.seed)
+
+    def __call__(self, s: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        s = self.base(s) if self.base is not None else dict(s)
+        r = self.rng
+        face = sensor_noise(s["face"], r, self.max_noise_sd)
+        eyes = [sensor_noise(s[k], r, self.max_noise_sd) for k in ("right_eye", "left_eye")]
+        if r.random() < 0.5:
+            ok, buf = cv2.imencode(".jpg", face, [cv2.IMWRITE_JPEG_QUALITY, int(r.integers(60, 96))])
+            if ok:
+                face = cv2.imdecode(buf, cv2.IMREAD_UNCHANGED)
+        dx, dy = (int(v) for v in r.integers(-self.max_shift, self.max_shift + 1, 2))
+        face = cv2.warpAffine(face, np.float32([[1, 0, dx], [0, 1, dy]]), (face.shape[1], face.shape[0]),
+                              borderMode=cv2.BORDER_REPLICATE)
+        s["view2"] = {"face": face, "right_eye": eyes[0], "left_eye": eyes[1]}
         return s

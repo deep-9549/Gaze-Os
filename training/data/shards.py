@@ -18,6 +18,7 @@ import hashlib
 import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -127,6 +128,17 @@ def write_manifest(paths: Sequence[str | Path], out: str | Path, extra: dict[str
     Path(out).write_text(json.dumps(data, indent=2))
 
 
+def _images(s: dict[str, np.ndarray]) -> dict[str, Any]:
+    import torch
+
+    face = (s["face"].astype(np.float32) / 255.0 - [0.485, 0.456, 0.406]) / [0.229, 0.224, 0.225]
+    return {
+        "face": torch.from_numpy(face.transpose(2, 0, 1).astype(np.float32)),
+        "right_eye": torch.from_numpy((s["right_eye"].astype(np.float32) / 127.5 - 1.0)[None]),
+        "left_eye": torch.from_numpy((s["left_eye"].astype(np.float32) / 127.5 - 1.0)[None]),
+    }
+
+
 class GazeShardDataset:
     """torch Dataset over one or more shards, optionally filtered by subject."""
 
@@ -176,16 +188,16 @@ class GazeShardDataset:
         s = self.raw(i)
         if self.transform is not None:
             s = self.transform(s)
-        face = (s["face"].astype(np.float32) / 255.0 - [0.485, 0.456, 0.406]) / [0.229, 0.224, 0.225]
-        return {
-            "face": torch.from_numpy(face.transpose(2, 0, 1).astype(np.float32)),
-            "right_eye": torch.from_numpy((s["right_eye"].astype(np.float32) / 127.5 - 1.0)[None]),
-            "left_eye": torch.from_numpy((s["left_eye"].astype(np.float32) / 127.5 - 1.0)[None]),
+        out = {
+            **_images(s),
             "head": torch.from_numpy(s["head"].astype(np.float32)),
             "gaze_deg": torch.from_numpy(np.degrees(s["gaze"]).astype(np.float32)),
             "subject": int(s["subject"]),
             "condition": int(s["condition"]),
         }
+        if "view2" in s:  # consistency training (augment.TwoViews)
+            out.update({k + "2": v for k, v in _images(s["view2"]).items()})
+        return out
 
     def subjects(self) -> list[int]:
         import h5py

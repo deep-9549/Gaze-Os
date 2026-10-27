@@ -25,6 +25,7 @@ data:
   val_fraction: 0.1
   stride: 1                 # subsampling; recorded with the results
   augment: true
+  sensor_noise_p: 0.0       # probability of added sensor noise (consistency fine-tune)
   workers: 4
 
 train:
@@ -41,6 +42,7 @@ train:
   nll_weight: 0.1
   nll_warmup_epochs: 5
   loss_mode: combined       # combined | classification | regression (E3)
+  consistency: 0.0          # weight of the two-view consistency term (0 = one view)
   resume: false             # continue from output_dir/last.pt if it exists
 
 logging:

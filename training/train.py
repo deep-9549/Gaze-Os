@@ -25,7 +25,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from training.data.augment import GazeAugment
+from training.data.augment import GazeAugment, TwoViews
 from training.data.shards import GazeShardDataset
 from training.losses.gaze import angular_error_deg, total_loss
 from training.models.gazenet import GazeNetGOS, bin_centers_deg
@@ -115,7 +115,9 @@ def make_loaders(cfg: Any) -> tuple[DataLoader, DataLoader | None, DataLoader | 
     probe = GazeShardDataset(paths)
     excluded = set(cfg.data.get("exclude_subjects") or [])  # e.g. held out for a cross-dataset test
     train_s, val_s, test_s = split_subjects([s for s in probe.subjects() if s not in excluded], cfg)
-    aug = GazeAugment(seed=cfg.seed) if cfg.data.augment else None
+    aug = GazeAugment(seed=cfg.seed, p_noise=cfg.data.get("sensor_noise_p", 0.0)) if cfg.data.augment else None
+    if cfg.train.get("consistency", 0.0) > 0:
+        aug = TwoViews(aug, seed=cfg.seed)  # type: ignore[assignment]
     train_ds = GazeShardDataset(paths, subjects=train_s, transform=aug, stride=cfg.data.stride)
     # Training workers persist: on Windows each worker re-imports torch and cv2 when it
     # starts, which left the GPU idle for 20-40 s every epoch. Each one also commits about
@@ -147,6 +149,25 @@ def evaluate(model: GazeNetGOS, loader: DataLoader, device: torch.device, center
     rho = float(spearmanr(s, e).correlation) if len(e) > 2 else float("nan")
     return {"mean_error_deg": float(e.mean()), "median_error_deg": float(np.median(e)),
             "per_subject": per_subject, "uncertainty_spearman": rho, "n": int(len(e))}
+
+
+def _batch_loss(model: GazeNetGOS, b: dict[str, Any], device: torch.device, centers: torch.Tensor, epoch: int,
+                t: Any) -> torch.Tensor:
+    """Gaze loss; with a second view (train.consistency > 0) both views are scored and the
+    squared difference of their angles, in degrees, is added with that weight."""
+    keys = ("face", "right_eye", "left_eye")
+    two = "face2" in b
+    inputs = [torch.cat([b[k], b[k + "2"]]) if two else b[k] for k in keys]
+    head, target = b["head"], b["gaze_deg"]
+    if two:
+        head, target = torch.cat([head, head]), torch.cat([target, target])
+    out = model(*(x.to(device) for x in inputs), head.to(device))
+    loss, pred = total_loss(out, target.to(device), centers, epoch, t.beta, t.nll_weight, t.nll_warmup_epochs,
+                            t.loss_mode)
+    if two:
+        a, c = pred.float().chunk(2)
+        loss = loss + t.consistency * ((a - c) ** 2).sum(-1).mean()
+    return loss
 
 
 def train(cfg: Any) -> dict[str, Any]:
@@ -187,9 +208,7 @@ def train(cfg: Any) -> dict[str, Any]:
         t0, running, n = time.time(), 0.0, 0
         for b in train_dl:
             with torch.autocast(device.type, dtype=torch.float16, enabled=use_amp):
-                out = model(b["face"].to(device), b["right_eye"].to(device), b["left_eye"].to(device), b["head"].to(device))
-                loss, _ = total_loss(out, b["gaze_deg"].to(device), centers, epoch, t.beta, t.nll_weight,
-                                     t.nll_warmup_epochs, t.loss_mode)
+                loss = _batch_loss(model, b, device, centers, epoch, t)
             opt.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
             scaler.unscale_(opt)

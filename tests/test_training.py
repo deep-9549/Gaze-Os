@@ -358,3 +358,28 @@ def test_camera_calibration_recovers_focal_length(tmp_path) -> None:
     assert abs(intr.matrix[0, 0] - 520) < 15 and rms < 1.0
     corners = np.zeros((54, 1, 2), np.float32)
     assert is_new_view(corners, [], 640) and not is_new_view(corners, [corners + 5], 640)
+
+
+def test_consistency_training_sees_two_views_of_each_sample(tmp_path) -> None:
+    """train.consistency > 0 adds a second, slightly perturbed view (noise, JPEG, a 1-2 px
+    shift) of every training sample and penalizes different answers for the two."""
+    from pathlib import Path
+
+    from hydra import compose, initialize_config_dir
+
+    from training.data.augment import GazeAugment, TwoViews
+    from training.data.shards import GazeShardDataset
+    from training.train import train
+
+    pack_synthetic(str(tmp_path / "shards"), subjects=3, per_subject=8)
+    ds = GazeShardDataset(sorted(str(p) for p in (tmp_path / "shards").glob("*.h5")),
+                          transform=TwoViews(GazeAugment(seed=0, p_noise=1.0), seed=0))
+    item = ds[0]
+    assert item["face2"].shape == item["face"].shape and not torch.equal(item["face2"], item["face"])
+    overrides = ["experiment=smoke_synthetic", f"data.shards=[{(tmp_path / 'shards').as_posix()}/*.h5]",
+                 f"output_dir={(tmp_path / 'run').as_posix()}", "data.val_fraction=0.5", "train.batch_size=4",
+                 "train.epochs=1", "train.consistency=1.0", "data.sensor_noise_p=0.5"]
+    config_dir = str((Path(__file__).parents[1] / "configs").resolve())
+    with initialize_config_dir(config_dir=config_dir, version_base="1.3"):
+        result = train(compose("train", overrides=overrides))
+    assert np.isfinite(result["history"][0]["train_loss"])
