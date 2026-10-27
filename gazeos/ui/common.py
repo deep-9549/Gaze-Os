@@ -119,12 +119,16 @@ def bring_to_top(widget: QWidget) -> None:
         widget.raise_()
         return
     import ctypes
+    from ctypes import wintypes
 
-    HWND_TOPMOST = -1
+    set_pos = ctypes.windll.user32.SetWindowPos  # type: ignore[attr-defined]
+    # Without argtypes ctypes passes HWND_TOPMOST (-1) as a 32-bit int, which 64-bit
+    # Windows does not read as -1, and the call silently does nothing.
+    set_pos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                        wintypes.UINT]
+    HWND_TOPMOST = wintypes.HWND(-1)
     SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 0x0001, 0x0002, 0x0010
-    ctypes.windll.user32.SetWindowPos(  # type: ignore[attr-defined]
-        int(widget.winId()), HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
-    )
+    set_pos(int(widget.winId()), HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
 
 
 def device_ratio(widget: QWidget | None = None) -> float:
