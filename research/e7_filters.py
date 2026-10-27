@@ -5,7 +5,7 @@ Kalman on RMS jitter during fixations, lag after saccades (ms to reach 90% of
 the jump) and dwell selection time, through the full control engine.
 
     python -m research.e7_filters --simulate --out results/e7_sim.json
-    python -m research.e7_filters --log data/logs/session.jsonl --out results/e7.json   # recorded raw gaze
+    python -m research.e7_filters --recording guided.pkl --out results/e7_webcam.json  # a guided webcam recording
 """
 
 from __future__ import annotations
@@ -48,6 +48,43 @@ def scanpath(rng: np.random.Generator, geometry: ScreenGeometry, n_fix: int = 40
             sig.append(s)
             t += 1 / fps
     return np.asarray(ts), np.asarray(noisy), np.asarray(true), np.asarray(sig)
+
+
+def recording_scanpath(path: str | Path, model: str, geometry: ScreenGeometry) -> tuple[np.ndarray, ...]:
+    """Calibrated webcam gaze from a guided 9-dot recording (research.webcam_stability format):
+    the model's estimate through a polynomial fitted on all dots (settled frames), with the
+    dot as the true gaze. Frames without a gaze sample are dropped."""
+    import pickle
+
+    import cv2
+
+    from gazeos.calibration.personalization import make_personalizer
+    from gazeos.calibration.protocol import CalibrationSample
+    from gazeos.inference.gaze import OnnxGazeEstimator
+    from gazeos.pipeline import FrameProcessor
+    from gazeos.vision.head_pose import CameraIntrinsics
+    from gazeos.vision.landmarks import FaceLandmarker
+
+    with open(path, "rb") as fh:
+        rec = [r for r in pickle.load(fh)["rec"] if r["part"] == "dots"]
+    s = Settings()
+    proc = FrameProcessor(s, geometry, CameraIntrinsics.default(640, 480), None, OnnxGazeEstimator(model))
+    lmk = FaceLandmarker()
+    rows, t0 = [], {}
+    for r in rec:
+        t0.setdefault(r["target"], r["t"])
+        img = cv2.cvtColor(cv2.imdecode(np.frombuffer(r["jpg"], np.uint8), cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+        obs = proc.process_landmarks(lmk.process(img, r["t"]), r["t"], img).observation
+        if obs is not None:
+            target = np.array([r["target"][0] * geometry.width_px, r["target"][1] * geometry.height_px])
+            rows.append((r["t"], obs, target, r["t"] - t0[r["target"]] >= 0.8))
+    p = make_personalizer("polynomial", geometry)
+    p.fit([CalibrationSample(o, tg) for _, o, tg, settled in rows if settled])
+    ts = np.array([t for t, *_ in rows]) - rows[0][0]
+    noisy = np.array([p.predict_px(o) for _, o, _, _ in rows])
+    true = np.array([tg for _, _, tg, _ in rows])
+    sig = np.full(len(rows), 1.0 * geometry.deg_to_px(1.0))
+    return ts, noisy, true, sig
 
 
 def run_filter(kind: str, data: tuple[np.ndarray, ...], geometry: ScreenGeometry) -> dict[str, float]:
@@ -93,13 +130,19 @@ def run_filter(kind: str, data: tuple[np.ndarray, ...], geometry: ScreenGeometry
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--simulate", action="store_true")
+    ap.add_argument("--recording", default=None, help="guided webcam recording (.pkl)")
+    ap.add_argument("--model", default="models/gazenet_m3.onnx")
     ap.add_argument("--seeds", type=int, default=3)
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     geometry = ScreenGeometry.from_settings(Settings().screen)
     results: dict[str, dict[str, float]] = {}
+    recorded = recording_scanpath(a.recording, a.model, geometry) if a.recording else None
     for kind in FILTERS:
-        runs = [run_filter(kind, scanpath(np.random.default_rng(seed), geometry), geometry) for seed in range(a.seeds)]
+        if recorded is not None:
+            runs = [run_filter(kind, recorded, geometry)]
+        else:
+            runs = [run_filter(kind, scanpath(np.random.default_rng(seed), geometry), geometry) for seed in range(a.seeds)]
         results[kind] = {k: float(np.nanmean([r[k] for r in runs])) for k in runs[0]}
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).write_text(json.dumps(results, indent=2))
