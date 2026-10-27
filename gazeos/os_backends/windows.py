@@ -13,6 +13,7 @@ import time
 from ctypes import wintypes
 
 from gazeos.os_backends.keys import WINDOWS_VK
+from gazeos.os_backends.nearby import nearby_elements
 from gazeos.types import Rect, UIElement
 
 log = logging.getLogger(__name__)
@@ -211,17 +212,9 @@ class WindowsBackend:
         return None if ctrl is None else self._to_element(ctrl)
 
     def elements_near(self, x: int, y: int, radius: int) -> list[UIElement]:
-        """Sample a small grid of points; UIA has no cheap region query."""
         if self._uia is None:
             return []
-        seen: dict[tuple[int, int, int, int], UIElement] = {}
-        step = max(radius // 2, 8)
-        for dy in range(-radius, radius + 1, step):
-            for dx in range(-radius, radius + 1, step):
-                e = self.element_at(x + dx, y + dy)
-                if e is not None and e.invokable:
-                    seen[(e.rect.left, e.rect.top, e.rect.width, e.rect.height)] = e
-        return list(seen.values())
+        return nearby_elements(self._uia.ControlFromPoint, self._to_element, x, y, radius)
 
     def focused_is_password(self) -> bool:
         if self._uia is None:

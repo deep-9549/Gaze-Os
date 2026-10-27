@@ -77,3 +77,51 @@ def test_autostart_files(tmp_path, monkeypatch) -> None:
         assert not autostart.is_enabled(platform)
     autostart.set_enabled(True, "linux")
     assert "gazeos.main" in (tmp_path / "autostart" / "gazeos.desktop").read_text()
+
+
+class _Box:
+    def __init__(self, left: int, top: int, right: int, bottom: int) -> None:
+        self.left, self.top, self.right, self.bottom = left, top, right, bottom
+
+
+class _Ctrl:
+    """A UI Automation control, as far as nearby_elements uses one."""
+
+    def __init__(self, name: str, role: str, rect: tuple[int, int, int, int], children=()) -> None:
+        self.Name, self.ControlTypeName, self.BoundingRectangle = name, role, _Box(*rect)
+        self.children, self.parent = list(children), None
+        for c in self.children:
+            c.parent = self
+
+    def GetChildren(self):  # noqa: N802
+        return self.children
+
+    def GetParentControl(self):  # noqa: N802
+        return self.parent
+
+    def at(self, x: int, y: int):
+        for c in self.children:
+            r = c.BoundingRectangle
+            if r.left <= x < r.right and r.top <= y < r.bottom:
+                return c.at(x, y)
+        return self
+
+
+def test_nearby_elements_finds_small_icons_between_probe_points() -> None:
+    """Probing every radius/2 found only buttons of 48 px and up (28 Oct, real UIA on Qt);
+    searching the containers finds 16 px icons too, and nothing outside the radius."""
+    from gazeos.os_backends.nearby import nearby_elements
+
+    icons = [_Ctrl(f"icon{i}", "ButtonControl", (300 + 24 * i, 100, 316 + 24 * i, 116)) for i in range(20)]
+    toolbar = _Ctrl("toolbar", "ToolBarControl", (290, 90, 800, 126), icons)
+    window = _Ctrl("app", "WindowControl", (0, 0, 1920, 1080), [toolbar, _Ctrl("text", "EditControl", (0, 200, 1920, 1080))])
+    desktop = _Ctrl("desktop", "PaneControl", (0, 0, 1920, 1080), [window])
+
+    def to_element(c):
+        r = c.BoundingRectangle
+        return UIElement(Rect(r.left, r.top, r.right - r.left, r.bottom - r.top), role=c.ControlTypeName, name=c.Name,
+                         invokable=c.ControlTypeName == "ButtonControl")
+
+    names = {e.name for e in nearby_elements(desktop.at, to_element, 450, 108, 60)}
+    # icons whose rectangle is within 60 px of x=450: left edges 300+24i in [382, 510]
+    assert names == {f"icon{i}" for i in range(20) if 300 + 24 * i + 16 >= 390 and 300 + 24 * i <= 510}
