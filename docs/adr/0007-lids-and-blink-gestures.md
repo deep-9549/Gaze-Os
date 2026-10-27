@@ -39,7 +39,6 @@ score passed 0.5 in 97% of frames. Every eye rule used fixed thresholds, so:
 3. **Profiles store only changed settings** (`exclude_defaults`), so improved
    defaults reach existing users; the first app sessions had pinned every default.
    Old keys are migrated on load.
-
 4. **Personal "closed" level** (`blink.closed_score`, default 0.5): blink tuning in
    onboarding records how far each long blink closes (the lower eye's peak score)
    and sets the level to 90% of the typical peak (between 0.5 and 0.9). In a guided
