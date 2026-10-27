@@ -200,6 +200,7 @@ clustered at 9 points.
 
 | Date | Change |
 | --- | --- |
+| 2026-10-27 | Late evening: 9-point webcam recording (light screen, before calibration) replayed through the engine gives cursor RMS precision 0.09-0.58° per point (PRD 0.5°) and an uncalibrated offset of 0.3-3°, so the cursor logic now behaves; the live app still felt unsteady, cause not yet isolated. Calibration now runs on a light surface; the cursor circle's size is eased; onboarding says Next can be clicked. |
 | 2026-10-27 | Evening, first webcam session: four app fixes (DirectShow fallback and auto exposure; overlay above other windows; saccade jump rule; no gaze sample while the lids close, ADR 0006). Network noise on the webcam is about 1.8 deg per frame vertically, 1.1-1.5 deg horizontally. |
 | 2026-10-27 | Seeds 1-2 finished at 05:08 (30 runs, no failures; seed means 4.84° and 4.68°). E1: 4.78° ± 0.09° over 3 seeds; 3-seed ensemble 4.65°. Both still above the 4.5° target; seed-to-seed spread (0.09°) is much smaller than fold-to-fold spread (1.3°), so the subjects, not the seeds, drive the number. |
 | 2026-10-25 | Plan written. Data audit of `F:\GazeOS-data`: MPIIFaceGaze 4 of 15 subjects; RT-GENE s004 truncated, s005 and s006 missing. RT-GENE label order verified. Google Drive (5 TB) added for shards and checkpoints. |
