@@ -181,8 +181,14 @@ def train(cfg: Any) -> dict[str, Any]:
         load_face_weights(model, cfg.init_face_checkpoint)
     if cfg.get("init_checkpoint"):
         state = torch.load(cfg.init_checkpoint, map_location="cpu")
-        missing, unexpected = model.load_state_dict(state["model"], strict=False)
-        log.info("initialized from %s (missing %d, unexpected %d)", cfg.init_checkpoint, len(missing), len(unexpected))
+        # An ablation (E2: fewer streams, concat fusion) changes some shapes; those layers
+        # start fresh, everything else from the checkpoint.
+        own = model.state_dict()
+        reshaped = [k for k, v in state["model"].items() if k in own and own[k].shape != v.shape]
+        weights = {k: v for k, v in state["model"].items() if k not in reshaped}
+        missing, unexpected = model.load_state_dict(weights, strict=False)
+        log.info("initialized from %s (missing %d, unexpected %d, reshaped %s)", cfg.init_checkpoint,
+                 len(missing), len(unexpected), reshaped)
     centers = bin_centers_deg(cfg.model.num_bins).to(device)
     t = cfg.train
     opt = torch.optim.AdamW(param_groups(model, t.lr_backbone, t.lr_new, t.weight_decay))

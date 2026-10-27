@@ -400,3 +400,24 @@ def test_uncertainty_fit_survives_a_nearly_constant_feature() -> None:
     sigma_deg = np.degrees(np.sqrt(np.exp(log_var(test, w, b))))
     assert np.median(sigma_deg) < 20
     assert sigma_deg.min() >= 0.49 and sigma_deg.max() <= 58  # the plausible range
+
+
+def test_ablation_starts_from_a_checkpoint_with_other_shapes(tmp_path) -> None:
+    """E2 arms (concat fusion, fewer streams) init from the full model's Stage A checkpoint:
+    the reshaped layers start fresh instead of failing the load."""
+    from pathlib import Path
+
+    from hydra import compose, initialize_config_dir
+
+    from training.train import train
+
+    pack_synthetic(str(tmp_path / "shards"), subjects=3, per_subject=8)
+    base = ["experiment=smoke_synthetic", f"data.shards=[{(tmp_path / 'shards').as_posix()}/*.h5]",
+            "data.val_fraction=0.5", "train.batch_size=4", "train.epochs=1"]
+    config_dir = str((Path(__file__).parents[1] / "configs").resolve())
+    with initialize_config_dir(config_dir=config_dir, version_base="1.3"):
+        train(compose("train", overrides=[*base, f"output_dir={(tmp_path / 'a').as_posix()}"]))
+        init = f"init_checkpoint={(tmp_path / 'a' / 'best.pt').as_posix()}"
+        for i, arm in enumerate(["model.fusion=concat", "model.use_face=false"]):
+            result = train(compose("train", overrides=[*base, init, arm, f"output_dir={(tmp_path / str(i)).as_posix()}"]))
+            assert np.isfinite(result["history"][0]["train_loss"])
