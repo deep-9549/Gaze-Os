@@ -37,6 +37,7 @@ class Overlay(QWidget):
             self.setGeometry(screen.geometry())
         self.out: EngineOutput | None = None
         self.show_cursor = True
+        self._radius: float | None = None  # drawn cursor radius, eased
         self.banner: str | None = None
         self.toast: tuple[str, float] | None = None
         self._zoom_pixmap: QPixmap | None = None
@@ -104,7 +105,10 @@ class Overlay(QWidget):
 
         if out is not None and out.cursor is not None and self.show_cursor:
             c = self._p(*out.cursor)
-            radius = max(10.0, min(out.sigma_px / self._ratio, 120.0))
+            target_r = max(10.0, min(out.sigma_px / self._ratio, 120.0))
+            # sigma_px changes every frame; ease the size (~0.3 s at 60 Hz) so it does not pulse.
+            self._radius = target_r if self._radius is None else self._radius + 0.05 * (target_r - self._radius)
+            radius = self._radius
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(color(th, "cursor", 60 if not out.paused else 25)))
             painter.drawEllipse(c, radius, radius)
