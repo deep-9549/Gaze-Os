@@ -219,3 +219,24 @@ def test_personal_closed_score_ignores_a_keyboard_glance(settings, geometry, int
             events.append(proc.process_landmarks(lm, t).engine_input.blink_event)
             t += 1 / 30
     assert [e for e in events if e is not None] == [BlinkEvent.LONG_BLINK]
+
+
+def test_small_target_test_records_hits_misses_and_wrong_clicks(qtbot) -> None:
+    from tools.small_targets import SmallTargetTest, make_trials
+
+    trials = make_trials(per_size=1, seed=0)
+    w = SmallTargetTest(trials)
+    qtbot.addWidget(w)
+    w.resize(1280, 800)
+    w.start()
+    target = trials[0]["target"]
+    w.buttons[(target + 1) % 7].click()  # a wrong button first
+    w.buttons[target].click()
+    w.buttons[trials[1]["target"]].click()
+    w.t_start -= 25  # trial 3 times out
+    w._check_timeout()
+    r = w.results
+    assert [x["hit"] for x in r] == [True, True, False]
+    assert (r[0]["first_click_correct"], r[0]["wrong_clicks"]) == (False, 1)
+    assert r[1]["first_click_correct"] and r[1]["wrong_clicks"] == 0
+    assert w.buttons[0].width() == trials[3]["size"]  # now on trial 4
