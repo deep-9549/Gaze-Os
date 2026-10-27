@@ -293,7 +293,8 @@ class GazeOSApp(QObject):
         self.debug.fps = getattr(self.worker, "fps", 0.0)
         self.debug.update_frame(pf, image)
         if self.onboarding is not None:
-            self.onboarding.update_frame(pf, image, self.processor.blinks.last_closure_ms)
+            self.onboarding.update_frame(pf, image, self.processor.blinks.last_closure_ms,
+                                         self.processor.blinks.last_closure_peak)
 
     def _handle_event(self, e: str) -> None:
         if e == "open_menu":
@@ -416,9 +417,12 @@ class GazeOSApp(QObject):
         self.sync.track("onboarding", self.onboarding)
         self.onboarding.show()
 
-    def _onboarding_done(self, threshold_ms: float | None) -> None:
+    def _onboarding_done(self, threshold_ms: float | None, closed_score: float | None = None) -> None:
         if threshold_ms is not None:
             self.settings.blink.long_blink_min_ms = threshold_ms
+        if closed_score is not None:
+            self.settings.blink.closed_score = closed_score
+        if threshold_ms is not None or closed_score is not None:
             self.profile.save_settings(self.settings)
         self.sync.untrack("onboarding")
         self.onboarding = None

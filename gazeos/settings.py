@@ -111,6 +111,10 @@ class BlinkSettings(_Section):
     # Off by default: looking down at the keyboard reads as closed eyes on a laptop webcam
     # (REVIEW.md item 12), so a 2 s glance toggled pause. The hotkey and corner still pause.
     eyes_closed_pause: bool = False
+    # Both eyes count as closed above this blink score. Blink tuning sets it per user
+    # (90% of their long blinks' peak): looking down at the keyboard reached 0.49-0.63
+    # where deliberate long blinks peaked at 0.73-0.76 (ADR 0007).
+    closed_score: float = Field(0.5, ge=0.3, le=0.95)
     ear_threshold: float = Field(0.21, gt=0, lt=1)
     winks_enabled: bool = False
 

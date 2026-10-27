@@ -168,17 +168,20 @@ def test_onboarding_blink_tuning(qtbot) -> None:
     from gazeos.ui.onboarding import Onboarding
 
     done = []
-    onb = Onboarding(lambda: None, done.append)
+    onb = Onboarding(lambda: None, lambda ms, closed: done.append((ms, closed)))
     qtbot.addWidget(onb)
     onb.show()
     onb.stack.setCurrentIndex(1)
     pf = ProcessedFrame(FrameResult(0.0), None)  # type: ignore[arg-type]
     img = np.zeros((480, 640, 3), np.uint8)
-    for ms in (150, 180, 200, 170, 160, 520, 600, 560, 650, 580):
-        onb.update_frame(pf, img, float(ms))
+    peaks = (0.55, 0.6, 0.58, 0.62, 0.57, 0.74, 0.75, 0.73, 0.76, 0.74)  # long blinks close further
+    for ms, peak in zip((150, 180, 200, 170, 160, 520, 600, 560, 650, 580), peaks, strict=True):
+        onb.update_frame(pf, img, float(ms), peak)
     assert onb.threshold is not None and 200 < onb.threshold < 520
+    # 90% of the long blinks' typical peak: above a keyboard glance (about 0.6) for this user.
+    assert onb.closed_score is not None and abs(onb.closed_score - 0.9 * 0.74) < 1e-6
     onb._finish()
-    assert done == [onb.threshold]
+    assert done == [(onb.threshold, onb.closed_score)]
 
 
 def test_overlay_painting_does_not_leak_none(qtbot, geometry) -> None:
@@ -197,3 +200,22 @@ def test_overlay_painting_does_not_leak_none(qtbot, geometry) -> None:
     for _ in range(300):
         ov.grab()
     assert sys.getrefcount(None) - before > -100
+
+
+def test_personal_closed_score_ignores_a_keyboard_glance(settings, geometry, intrinsics, user) -> None:
+    """With the tuned level (0.67), lids at 0.6 (looking down at the keyboard) are not a
+    closure, so no long-blink click; a real long blink (0.75) still is (ADR 0007)."""
+    from gazeos.gestures.blink import BlinkEvent
+
+    s = settings.model_copy(deep=True)
+    s.blink.closed_score = 0.67
+    proc = FrameProcessor(s, geometry, intrinsics, None)
+    events = []
+    t = 0.0
+    for score, frames in ((0.05, 10), (0.6, 18), (0.05, 10), (0.75, 18), (0.05, 10)):  # 600 ms each
+        for _ in range(frames):
+            lm = user.look_at(960, 540)
+            lm.blendshapes = {**(lm.blendshapes or {}), "eyeBlinkLeft": score, "eyeBlinkRight": score}
+            events.append(proc.process_landmarks(lm, t).engine_input.blink_event)
+            t += 1 / 30
+    assert [e for e in events if e is not None] == [BlinkEvent.LONG_BLINK]

@@ -10,7 +10,7 @@ from numpy.typing import NDArray
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
-from gazeos.gestures.blink import tune_long_blink_threshold
+from gazeos.gestures.blink import tune_closed_score, tune_long_blink_threshold
 from gazeos.pipeline import ProcessedFrame
 from gazeos.types import TrackingStatus
 from gazeos.ui.common import stylesheet
@@ -29,7 +29,7 @@ class Onboarding(QWidget):
     def __init__(
         self,
         start_calibration: Callable[[], None],
-        on_finish: Callable[[float | None], None],
+        on_finish: Callable[[float | None, float | None], None],
         theme_name: str = "default",
     ) -> None:
         super().__init__(None, Qt.WindowType.WindowStaysOnTopHint)
@@ -39,6 +39,8 @@ class Onboarding(QWidget):
         self.on_finish = on_finish
         self.normal_ms: list[float] = []
         self.long_ms: list[float] = []
+        self.long_peaks: list[float] = []
+        self.closed_score: float | None = None
         self.blink_phase = "normal"
         self.threshold: float | None = None
         self._last_closure: float | None = None
@@ -126,7 +128,7 @@ class Onboarding(QWidget):
 
     def _finish(self) -> None:
         self.close()
-        self.on_finish(self.threshold)
+        self.on_finish(self.threshold, self.closed_score)
 
     def calibration_done(self, score: int | None, mean_deg: float | None) -> None:
         if score is None or mean_deg is None:
@@ -143,9 +145,11 @@ class Onboarding(QWidget):
             n = len(self.long_ms)
             self.blink_hint.setText(f"Now do 5 long blinks: close both eyes for about half a second. ({n}/5)")
         else:
-            self.blink_hint.setText(f"Done. Your long-blink threshold is {self.threshold:.0f} ms.")
+            closed = f"; eyes count as closed above {self.closed_score:.2f}" if self.closed_score else ""
+            self.blink_hint.setText(f"Done. Your long-blink threshold is {self.threshold:.0f} ms{closed}.")
 
-    def update_frame(self, pf: ProcessedFrame, image: NDArray[np.uint8], last_closure_ms: float | None) -> None:
+    def update_frame(self, pf: ProcessedFrame, image: NDArray[np.uint8], last_closure_ms: float | None,
+                     last_closure_peak: float | None = None) -> None:
         if not self.isVisible():
             return
         page = self.stack.currentIndex()
@@ -163,8 +167,11 @@ class Onboarding(QWidget):
             elif self.blink_phase == "long":
                 if last_closure_ms > max(self.normal_ms) * 1.2:
                     self.long_ms.append(last_closure_ms)
+                    if last_closure_peak is not None:
+                        self.long_peaks.append(last_closure_peak)
                 if len(self.long_ms) >= 5:
                     self.threshold = tune_long_blink_threshold(self.normal_ms, self.long_ms)
+                    self.closed_score = tune_closed_score(self.long_peaks) if self.long_peaks else None
                     self.blink_phase = "done"
             self._update_blink_hint()
 

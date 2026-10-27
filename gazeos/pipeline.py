@@ -131,11 +131,12 @@ class FrameProcessor:
 
         # Eyes and blinks.
         ear_l, ear_r = feat.ear_pair(landmarks)
-        state = eye_state(lm.blendshapes, ear_l, ear_r, self.s.blink.ear_threshold,
-                          self.s.quality.blink_score_threshold)
+        state = eye_state(lm.blendshapes, ear_l, ear_r, self.s.blink.ear_threshold, self.s.blink.closed_score)
         blink_score = max(lm.blendshapes.get("eyeBlinkLeft", 0.0), lm.blendshapes.get("eyeBlinkRight", 0.0)) \
             if lm.blendshapes else (1.0 if state.both_closed else 0.0)
-        blink_event = self.blinks.update(t, state)
+        both_score = min(lm.blendshapes.get("eyeBlinkLeft", 0.0), lm.blendshapes.get("eyeBlinkRight", 0.0)) \
+            if lm.blendshapes else None
+        blink_event = self.blinks.update(t, state, both_score)
         lid_down = not self.lids.update(blink_score)
 
         brightness = 255.0

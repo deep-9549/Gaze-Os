@@ -40,5 +40,14 @@ score passed 0.5 in 97% of frames. Every eye rule used fixed thresholds, so:
    defaults reach existing users; the first app sessions had pinned every default.
    Old keys are migrated on load.
 
-Long-blink clicks remain (FR-20), pending a per-user check that deliberate long
-blinks and looking down can be told apart; see REVIEW.md item 12.
+4. **Personal "closed" level** (`blink.closed_score`, default 0.5): blink tuning in
+   onboarding records how far each long blink closes (the lower eye's peak score)
+   and sets the level to 90% of the typical peak (between 0.5 and 0.9). In a guided
+   recording the developer's five long blinks peaked at 0.754-0.765 and three
+   glances at the keyboard at 0.51-0.64; at the default 0.5 the glances produced
+   four closures, one of them a long-blink click; at the tuned 0.682 none, while
+   all five long blinks were still detected.
+
+Tried and not adopted: smoothing the head pose before normalization (One Euro,
+four settings) left the network's frame-to-frame noise unchanged (1.62-1.66 deg
+pitch) on the same recording, so the unused `head_filter` stays unused.

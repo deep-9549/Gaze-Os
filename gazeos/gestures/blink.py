@@ -91,16 +91,22 @@ class BlinkDetector:
         self._left_start: float | None = None
         self._right_start: float | None = None
         self._both_seen = False  # both eyes closed at some point in this closure
-        # Duration of the most recent both-eyes closure, for blink tuning (PRD 7.6).
+        self._peak = 0.0
+        # Duration and peak score of the most recent both-eyes closure, for blink tuning (PRD 7.6).
         self.last_closure_ms: float | None = None
+        self.last_closure_peak: float | None = None
 
     @property
     def eyes_closed_since(self) -> float | None:
         starts = [s for s in (self._both_start, self._left_start, self._right_start) if s is not None]
         return min(starts) if starts else None
 
-    def update(self, t: float, state: EyeState) -> BlinkEvent | None:
+    def update(self, t: float, state: EyeState, both_score: float | None = None) -> BlinkEvent | None:
+        """`both_score`: the lower of the two eyes' blink scores, if known (how far a closure
+        went, for per-user tuning)."""
         event: BlinkEvent | None = None
+        if both_score is not None and state.any_closed:
+            self._peak = max(self._peak, both_score)
         # Track each eye's closure start.
         if state.left_closed and self._left_start is None:
             self._left_start = t
@@ -115,9 +121,12 @@ class BlinkDetector:
             self._left_start is not None or self._right_start is not None
         )
         if closure_over:
+            if self._both_seen:
+                self.last_closure_peak = self._peak or None
             event = self._classify(t)
             self._both_start = self._left_start = self._right_start = None
             self._both_seen = False
+            self._peak = 0.0
         return event
 
     def _classify(self, t: float) -> BlinkEvent | None:
@@ -146,6 +155,17 @@ class BlinkDetector:
     def reset(self) -> None:
         self._both_start = self._left_start = self._right_start = None
         self._both_seen = False
+        self._peak = 0.0
+
+
+def tune_closed_score(long_blink_peaks: Sequence[float], fraction: float = 0.9, floor: float = 0.5,
+                      ceiling: float = 0.9) -> float:
+    """Personal "both eyes closed" level: a fraction of the user's long blinks' typical peak
+    score, so a glance down at the keyboard (lids low, lower score) is not a closure."""
+    if not long_blink_peaks:
+        return floor
+    peak = sorted(long_blink_peaks)[len(long_blink_peaks) // 2]
+    return float(min(max(fraction * peak, floor), ceiling))
 
 
 def tune_long_blink_threshold(
