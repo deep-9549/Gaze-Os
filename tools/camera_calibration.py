@@ -87,7 +87,7 @@ def capture_views(width: int, height: int, index: int, pattern: tuple[int, int],
     src = OpenCVSource(index, width, height, 30)
     shots: list[np.ndarray] = []
     taken: list[np.ndarray] = []
-    label = QLabel()
+    label = QLabel(None, Qt.WindowType.WindowStaysOnTopHint)
     label.setWindowTitle("GazeOS camera calibration")
     label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
