@@ -6,7 +6,11 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 root = Path(SPECPATH).parent  # noqa: F821 - provided by PyInstaller
-models = [(str(p), "models") for p in (root / "models").glob("*") if p.suffix in {".onnx", ".task", ".txt", ".npz"}]
+# The models the app loads (when installed locally; none are in Git): landmarks, M3/M4,
+# gestures and the language models. Backups and test models stay out.
+MODEL_FILES = ("face_landmarker.task", "gazenet_m3.onnx", "gazenet_lite.onnx", "gesture_tcn.onnx",
+               "ngram_en.json", "lm_small.onnx", "lm_small.vocab.txt")
+models = [(str(root / "models" / n), "models") for n in MODEL_FILES if (root / "models" / n).exists()]
 
 a = Analysis(  # noqa: F821
     [str(root / "gazeos" / "main.py")],
