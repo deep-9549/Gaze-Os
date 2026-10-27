@@ -7,9 +7,9 @@ its own copy.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ControlMode(StrEnum):
@@ -67,9 +67,20 @@ class FilterSettings(_Section):
 
 
 class FixationSettings(_Section):
-    saccade_velocity_deg_s: float = 30.0
+    # A saccade is a jump of the raw gaze away from the cursor, confirmed on consecutive
+    # frames; the PRD's 30 deg/s velocity rule fires on webcam noise (ADR 0006).
+    saccade_jump_deg: float = Field(5.0, gt=0)
+    saccade_confirm_frames: int = Field(2, ge=1)
     dispersion_deg: float = 1.0
     min_fixation_ms: float = 100.0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_velocity_rule(cls, data: Any) -> Any:
+        """Profiles saved before ADR 0006 still carry the old velocity setting."""
+        if isinstance(data, dict):
+            data = {k: v for k, v in data.items() if k != "saccade_velocity_deg_s"}
+        return data
 
 
 class DwellSettings(_Section):

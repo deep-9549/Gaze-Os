@@ -76,8 +76,32 @@ def test_fixation_detector(rng) -> None:
     for i, p in enumerate(_jitter(rng, 30, sigma=5.0)):
         events.append(det.update(i / 30, p, p).event)
     assert EyeEvent.FIXATION in events
-    out = det.update(31 / 30, np.array([1500.0, 400.0]), np.array([1500.0, 400.0]))
+    # A 7 degree jump needs a second frame (one frame could be noise); the filter trails it.
+    near, lagging = np.array([500.0 + 7 * 58.0, 400.0]), np.array([550.0, 400.0])
+    assert not det.update(31 / 30, near, lagging).saccade_started
+    out = det.update(32 / 30, near, lagging)
     assert out.event == EyeEvent.SACCADE and out.saccade_started
+    # A 15 degree jump cannot be noise and moves the cursor at once.
+    far = near + np.array([15 * 58.0, 0.0])
+    assert det.update(33 / 30, far, near).saccade_started
+
+
+def test_webcam_noise_is_not_a_saccade() -> None:
+    """Regression: with the gaze noise measured on the laptop webcam (1.1 deg x 2.45 deg
+    per frame) the old 30 deg/s rule called a third of all frames a saccade, and each
+    one reset the filter, so the cursor was not smoothed at all."""
+    ppd = 58.0
+    rng = np.random.default_rng(0)
+    filt = OneEuroFilter(units_per_px=1 / ppd)
+    det = FixationDetector(px_per_deg=ppd)
+    resets = 0
+    for i in range(900):  # 30 s at 30 fps
+        raw = np.array([960.0, 540.0]) + rng.normal(0, 1, 2) * np.array([1.10, 2.45]) * ppd
+        if det.update(i / 30, raw, filt(i / 30, raw)).saccade_started:
+            resets += 1
+            filt.reset()
+            filt(i / 30, raw)
+    assert resets <= 3
 
 
 def test_dwell_state_machine() -> None:
@@ -278,3 +302,10 @@ def test_engine_rest_reminder(settings, geometry) -> None:
         t += 1 / 30
         events += eng.update(EngineInput(t, None, OK)).events
     assert "rest_reminder" in events
+
+
+def test_old_profile_with_velocity_rule_still_loads() -> None:
+    from gazeos.settings import Settings
+
+    s = Settings.model_validate({"fixation": {"saccade_velocity_deg_s": 30.0, "dispersion_deg": 1.0}})
+    assert s.fixation.saccade_jump_deg == 5.0

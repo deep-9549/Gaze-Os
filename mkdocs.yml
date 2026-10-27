@@ -23,6 +23,7 @@ nav:
       - Word-level transformer: adr/0003-word-level-transformer.md
       - Package layout: adr/0004-package-layout.md
       - Filter units: adr/0005-filter-units.md
+      - Saccade jump rule: adr/0006-saccade-jump-rule.md
   - User study: study/README.md
   - Model card template: models/MODEL_CARD_TEMPLATE.md
   - Third-party material: THIRD_PARTY.md

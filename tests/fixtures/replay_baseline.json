@@ -1,5 +1,6 @@
 {
-  "mean_error_px": 44.82,
-  "jitter_px": 8.47,
-  "note": "Synthetic replay session; regenerate with tests/fixtures/README.md when the pipeline intentionally changes."
+  "mean_error_px": 37.51,
+  "jitter_px": 8.94,
+  "note": "Synthetic replay session; regenerate with tests/fixtures/README.md when the pipeline intentionally changes.",
+  "changed": "2026-10-27: saccade jump rule (ADR 0006) replaced the 30 deg/s velocity rule; error -16%, jitter +5.5% on this near-noiseless session, about 4x less jitter on real webcam noise."
 }

@@ -96,9 +96,10 @@ class ControlEngine:
         self.filter: PointFilter = make_filter(settings.filter, self.px_per_deg)
         self.fixation = FixationDetector(
             self.px_per_deg,
-            settings.fixation.saccade_velocity_deg_s,
-            settings.fixation.dispersion_deg,
-            settings.fixation.min_fixation_ms,
+            saccade_jump_deg=settings.fixation.saccade_jump_deg,
+            dispersion_deg=settings.fixation.dispersion_deg,
+            min_fixation_ms=settings.fixation.min_fixation_ms,
+            confirm_frames=settings.fixation.saccade_confirm_frames,
         )
         self.dwell = DwellClicker(
             settings.dwell.dwell_ms, settings.dwell.radius_deg * self.px_per_deg, settings.dwell.cooldown_ms

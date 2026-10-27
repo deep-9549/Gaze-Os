@@ -1,6 +1,8 @@
 """Fixation and saccade detection (PRD 12.4, FR-15).
 
-I-VT: angular velocity above 30 deg/s is a saccade.
+Saccade: the raw gaze lands more than 5 degrees from the smoothed cursor on two
+consecutive frames in the same direction, or more than 10 degrees on one frame.
+The PRD's velocity rule (30 deg/s) fires on webcam noise alone; see ADR 0006.
 I-DT: samples staying within 1 degree for at least 100 ms form a fixation;
 during a fixation the cursor sits at the running median of its samples.
 """
@@ -34,15 +36,18 @@ class FixationDetector:
     def __init__(
         self,
         px_per_deg: float,
-        saccade_velocity_deg_s: float = 30.0,
+        saccade_jump_deg: float = 5.0,
         dispersion_deg: float = 1.0,
         min_fixation_ms: float = 100.0,
         max_window: int = 90,
         hold_window_s: float = 0.5,
         settle_s: float = 0.15,
+        confirm_frames: int = 2,
     ) -> None:
         self.px_per_deg = px_per_deg
-        self.v_saccade = saccade_velocity_deg_s
+        self.jump_px = saccade_jump_deg * px_per_deg
+        self.confirm_frames = confirm_frames
+        self._jumps: list[FloatArray] = []  # offsets of the current saccade candidate
         self.dispersion_px = dispersion_deg * px_per_deg
         self.min_fix_s = min_fixation_ms / 1000.0
         self.hold_window_s = hold_window_s
@@ -54,6 +59,7 @@ class FixationDetector:
     def reset(self) -> None:
         self._window.clear()
         self._last = None
+        self._jumps = []
         self.in_fixation = False
 
     def update(self, t: float, raw: FloatArray, filtered: FloatArray) -> FixationOutput:
@@ -64,14 +70,23 @@ class FixationDetector:
         filtered = np.asarray(filtered, dtype=np.float64)
         saccade = False
         if self._last is not None:
-            dt = t - self._last[0]
-            if dt > 0:
-                v_deg = float(np.linalg.norm(filtered - self._last[1])) / self.px_per_deg / dt
-                saccade = v_deg > self.v_saccade
+            jump = raw - self._last[1]  # raw gaze vs the cursor before this frame
+            norm = float(np.linalg.norm(jump))
+            same_way = all(
+                float(np.dot(jump, j)) > 0.5 * norm * float(np.linalg.norm(j)) for j in self._jumps
+            )
+            if norm <= self.jump_px:
+                self._jumps = []
+            else:
+                self._jumps = [*self._jumps, jump] if same_way else [jump]
+            # A jump of twice the threshold is too large for noise: no need to wait.
+            saccade = len(self._jumps) >= self.confirm_frames or norm > 2 * self.jump_px
         self._last = (t, filtered)
 
         if saccade:
             self._window.clear()
+            self._jumps = []
+            self._last = (t, raw.copy())  # the engine restarts its filter at the raw point
             self.in_fixation = False
             return FixationOutput(EyeEvent.SACCADE, raw.copy(), saccade_started=True)
 
