@@ -107,9 +107,13 @@ def fit(checkpoint: str | Path, out: str | Path, shards: list[str] | None = None
     b = b + calibration_shift(log_var(data[calib]["features"], w, b), data[calib]["err_deg"])
     report: dict[str, Any] = {"checkpoint": str(checkpoint), "split": {"train": train_s, "val": val_s, "test": test_s},
                               "calibrated_on": calib}
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
     for name, d in data.items():
         lv_old, lv_new = log_var(d["features"], *before), log_var(d["features"], w, b)
         z2 = np.deg2rad(d["err_deg"]) ** 2 / np.exp(lv_new)
+        if name == "test":  # per sample, for the E12 reliability diagram
+            np.savez(out.with_suffix(".test.npz"), log_var=lv_new, err_deg=d["err_deg"], angular_deg=d["angular_deg"])
         report[name] = {
             "n": int(len(d["angular_deg"])),
             "mean_error_deg": float(d["angular_deg"].mean()),
@@ -123,8 +127,6 @@ def fit(checkpoint: str | Path, out: str | Path, shards: list[str] | None = None
     new_state["model"]["var_head.weight"] = torch.as_tensor(w, dtype=state["model"]["var_head.weight"].dtype)
     new_state["model"]["var_head.bias"] = torch.as_tensor(b, dtype=state["model"]["var_head.bias"].dtype)
     new_state["uncertainty_fit"] = {k: v for k, v in report.items() if k != "checkpoint"}
-    out = Path(out)
-    out.parent.mkdir(parents=True, exist_ok=True)
     torch.save(new_state, out)
     out.with_suffix(".json").write_text(json.dumps(report, indent=2))
     return report
