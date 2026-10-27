@@ -12,7 +12,7 @@ non-commercial research data and stays local (`models/` is git-ignored for it).
 | Config | Stage A `experiment=stage_a_rtgene_eth`; Stage B `experiment=stage_b_mpii data.fold=null`; Stage C `training.distill` (T = 4, 20 epochs, best epoch 15); `data.workers=4`, seed 0 |
 | Training data | MPIIFaceGaze subjects p00-p05, p07-p12, p14 (13); validation p06, p13. Stage A: RT-GENE s000-s002, s004-s006, s008-s013 (validation s007; s003 excluded for degraded images; s014-s016 held out). Shard manifests with SHA-256 checksums next to the shards |
 | Input / output | GazeOS ONNX contract: normalized 224x224 RGB face, two 36x60 eye crops (left mirrored), head pose; pitch/yaw bin logits, log-variance, 256-d features, attention |
-| Size / precision | 10.0 MB, fp32. Static INT8 was rejected: it lost 1.2° and ran slower (2.69 vs 2.02 ms/frame) |
+| Size / precision | 10.0 MB, fp32 (installed 27 Oct 2026 with the refitted uncertainty head; the previous file is kept as `models/gazenet_lite_prev.onnx`). Static INT8 was rejected: it lost 1.2° and ran slower (2.69 vs 2.02 ms/frame) |
 
 ## Metrics
 
@@ -23,7 +23,7 @@ non-commercial research data and stays local (`models/` is git-ignored for it).
 | After 9-point calibration | not measured yet (needs GazeOS-Webcam) | |
 | Parity vs PyTorch | M3 3.9e-6° mean (limit 0.05°) | 1,000 images of p06 |
 | CPU latency, model only | 2.02 ms/frame (ONNX Runtime, fp32) | laptop CPU, 1,000 images; full pipeline profile pending |
-| Uncertainty Spearman ρ | see each fold's `result.json` | E12 |
+| Uncertainty: Spearman ρ between predicted σ and error; median σ | ρ +0.21 (was +0.19); median σ 2.7° (was 1.5°, against a 3.3° actual error) | MPIIFaceGaze p06 + p13; `var_head` refitted after training (`training.fit_uncertainty`, 27 Oct 2026), angles bit-identical |
 
 ## Limitations and fairness
 
