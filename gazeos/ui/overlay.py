@@ -16,7 +16,14 @@ from PySide6.QtWidgets import QWidget
 from gazeos.control.engine import EngineOutput
 from gazeos.control.zoom import ZoomRegion
 from gazeos.types import TrackingStatus
-from gazeos.ui.common import STATUS_COLORS, apply_no_activate, color, device_ratio, overlay_flags
+from gazeos.ui.common import (
+    STATUS_COLORS,
+    apply_no_activate,
+    bring_to_top,
+    color,
+    device_ratio,
+    overlay_flags,
+)
 
 
 class Overlay(QWidget):
@@ -38,6 +45,16 @@ class Overlay(QWidget):
         self._repaint = QTimer(self)
         self._repaint.timeout.connect(self.update)
         self._repaint.start(16)  # ~60 Hz redraw (PRD 8.1)
+        # Onboarding, menus and the keyboard are always-on-top too and cover the cursor
+        # when shown or clicked; re-assert the overlay's place above them.
+        self.stay_on_top = True
+        self._top = QTimer(self)
+        self._top.timeout.connect(self.keep_on_top)
+        self._top.start(500)
+
+    def keep_on_top(self) -> None:
+        if self.stay_on_top and self.isVisible():
+            bring_to_top(self)
 
     def showEvent(self, event: object) -> None:  # noqa: N802
         super().showEvent(event)  # type: ignore[arg-type]

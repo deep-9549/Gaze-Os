@@ -433,11 +433,13 @@ class GazeOSApp(QObject):
             current_predict=(lambda obs: self.engine.drift.apply(self.personalizer.predict_px(obs))) if quick else None,
         )
         self.sync.track("calibration", self.calibration)
+        self.overlay.stay_on_top = False  # the dots, not the cursor, are what to look at
         self.calibration.showFullScreen()
 
     def _calibration_done(self, outcome: CalibrationOutcome | None) -> None:
         self.sync.untrack("calibration")
         self.calibration = None
+        self.overlay.stay_on_top = True
         with self.worker.with_engine():
             self.worker.engine_enabled = True
             if outcome is not None:

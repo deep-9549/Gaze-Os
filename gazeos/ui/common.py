@@ -112,6 +112,21 @@ def apply_no_activate(widget: QWidget, click_through: bool = False) -> None:
     user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
 
 
+def bring_to_top(widget: QWidget) -> None:
+    """Put an always-on-top window above the other always-on-top windows without
+    activating it (a shown or clicked topmost window otherwise covers it)."""
+    if sys.platform != "win32":
+        widget.raise_()
+        return
+    import ctypes
+
+    HWND_TOPMOST = -1
+    SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 0x0001, 0x0002, 0x0010
+    ctypes.windll.user32.SetWindowPos(  # type: ignore[attr-defined]
+        int(widget.winId()), HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
+    )
+
+
 def device_ratio(widget: QWidget | None = None) -> float:
     screen = widget.screen() if widget is not None else QGuiApplication.primaryScreen()
     return float(screen.devicePixelRatio()) if screen is not None else 1.0
