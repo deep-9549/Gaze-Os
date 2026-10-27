@@ -56,7 +56,12 @@ def is_new_view(corners: np.ndarray, taken: list[np.ndarray], image_width: int, 
     return all(np.linalg.norm(pts - t.reshape(-1, 2), axis=1).mean() > min_shift * image_width for t in taken)
 
 
-def calibrate(images: list[np.ndarray], pattern: tuple[int, int], square_mm: float) -> tuple[CameraIntrinsics, float]:
+def calibrate(images: list[np.ndarray], pattern: tuple[int, int], square_mm: float,
+              full_distortion: bool = False) -> tuple[CameraIntrinsics, float]:
+    """Focal length, centre and one radial distortion term. The full five-term model fitted to
+    a hand-held phone board (27 Oct 2026) broke head pose (distance 24 mm, reprojection
+    111 px); a 640x480 webcam needs little more than k1. `full_distortion` for a printed,
+    flat board."""
     objp = np.zeros((pattern[0] * pattern[1], 3), np.float32)
     objp[:, :2] = np.mgrid[0:pattern[0], 0:pattern[1]].T.reshape(-1, 2) * square_mm
     obj_pts, img_pts = [], []
@@ -70,7 +75,8 @@ def calibrate(images: list[np.ndarray], pattern: tuple[int, int], square_mm: flo
             img_pts.append(corners)
     if len(obj_pts) < 5 or size is None:
         raise ValueError(f"need at least 5 checkerboard views, found {len(obj_pts)}")
-    rms, K, dist, _, _ = cv2.calibrateCamera(obj_pts, img_pts, size, None, None)
+    flags = 0 if full_distortion else cv2.CALIB_ZERO_TANGENT_DIST | cv2.CALIB_FIX_K2 | cv2.CALIB_FIX_K3
+    rms, K, dist, _, _ = cv2.calibrateCamera(obj_pts, img_pts, size, None, None, flags=flags)
     return CameraIntrinsics(np.asarray(K, float), np.asarray(dist, float).ravel()), float(rms)
 
 
@@ -141,6 +147,7 @@ def main() -> None:
     ap.add_argument("--out", default="camera_intrinsics.json")
     ap.add_argument("--make-board", metavar="PNG", help="write a checkerboard image and exit")
     ap.add_argument("--profile", default=None, help="also set camera.intrinsics_file in this GazeOS profile")
+    ap.add_argument("--full-distortion", action="store_true", help="fit all five distortion terms (printed board)")
     a = ap.parse_args()
     if a.make_board:
         print(f"wrote {make_board(a.make_board, a.cols, a.rows)}")
@@ -152,7 +159,7 @@ def main() -> None:
     cam = settings.camera
     shots = capture_views(cam.width, cam.height, cam.device_index if a.camera is None else a.camera,
                           (a.cols, a.rows), a.views)
-    intr, rms = calibrate(shots, (a.cols, a.rows), a.square_mm)
+    intr, rms = calibrate(shots, (a.cols, a.rows), a.square_mm, a.full_distortion)
     out = Path(a.out).resolve()
     intr.save(out)
     fx, fy = intr.matrix[0, 0], intr.matrix[1, 1]
