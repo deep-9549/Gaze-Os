@@ -365,7 +365,10 @@ class GazeOSApp(QObject):
     def toggle_keyboard(self) -> None:
         if self.keyboard is None:
             layout = get_layout(self.settings.typing.layout)
-            predictor = Predictor.default(layout, self.settings.typing.num_predictions)
+            predictor = Predictor.default(
+                layout, self.settings.typing.num_predictions, ngram_path=Path("models/ngram_en.json"),
+                transformer_path=Path("models/lm_small.onnx") if self.settings.typing.use_transformer else None,
+            )
             if self.settings.typing.use_llm:
                 predictor.llm = LocalLLM(self.settings.typing.llm_model)
             if self.profile.dictionary_file.exists():

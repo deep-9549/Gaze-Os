@@ -129,3 +129,14 @@ def test_phrase_bank(tmp_path) -> None:
     pb.note_typed("see you soon")
     assert pb.note_typed("see you soon")
     assert "see you soon" in PhraseBank(tmp_path / "p.json").phrases
+
+
+def test_default_predictor_loads_a_trained_trigram_when_present(tmp_path) -> None:
+    from gazeos.text_entry.ngram import KneserNeyTrigram, sentences
+    from gazeos.text_entry.predictor import Predictor
+
+    KneserNeyTrigram().fit(sentences("see you tomorrow morning. see you tomorrow night.") * 5).save(tmp_path / "ng.json")
+    trained = Predictor.default(get_layout("qwerty"), ngram_path=tmp_path / "ng.json")
+    assert "tomorrow" in trained.suggest("see you ", "").words
+    seed = Predictor.default(get_layout("qwerty"), ngram_path=tmp_path / "missing.json")
+    assert seed.ngram is not None  # falls back to the seed corpus

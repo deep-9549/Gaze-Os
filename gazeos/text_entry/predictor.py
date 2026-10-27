@@ -54,19 +54,28 @@ class Predictor:
         self._sentence: str | None = None
 
     @classmethod
-    def default(cls, layout: Layout | None = None, k: int = 4) -> Predictor:
-        """Bundled English word list and seed conversational n-gram."""
+    def default(cls, layout: Layout | None = None, k: int = 4, ngram_path: Path | None = None,
+                transformer_path: Path | None = None) -> Predictor:
+        """Bundled English word list, plus the trained 3-gram (and transformer) when the
+        files exist (`training.train_lm`), else a 3-gram of the small seed corpus."""
         trie = PrefixTrie.from_file(DATA_DIR / "words_en.txt")
         seed = DATA_DIR / "seed_corpus.txt"
         ngram = None
-        if seed.exists():
+        if ngram_path is not None and ngram_path.exists():
+            ngram = KneserNeyTrigram.load(ngram_path)
+        elif seed.exists():
             from gazeos.text_entry.ngram import sentences
 
             ngram = KneserNeyTrigram().fit(sentences(seed.read_text(encoding="utf-8")))
             for w, c in ngram.unigram.items():
                 if w.isalpha() and w not in trie:
                     trie.add(w, c)
-        return cls(trie, ngram, layout=layout, k=k)
+        transformer = None
+        if transformer_path is not None and transformer_path.exists():
+            from gazeos.inference.lm import OnnxWordLM
+
+            transformer = OnnxWordLM(transformer_path)
+        return cls(trie, ngram, transformer, layout=layout, k=k)
 
     def lm_prob(self, w: str, context: Sequence[str]) -> float:
         p_trie = max(self.trie.count(w) / (self.trie.total or 1.0), 1e-9)
