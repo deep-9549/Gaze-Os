@@ -156,6 +156,8 @@ class GazeOSApp(QObject):
                 log.exception("could not load calibration; starting uncalibrated")
         return make_personalizer(self.settings.calibration.method, self.geometry)
 
+    gaze_model_path: Path | None = None  # the model file in use ("auto" resolved)
+
     def _make_processor(self) -> FrameProcessor:
         gaze_model = gesture_model = None
         landmarker = None
@@ -166,6 +168,7 @@ class GazeOSApp(QObject):
             from gazeos.inference.gaze import OnnxGazeEstimator, resolve_gaze_model
 
             model_path = resolve_gaze_model(self.settings.gaze_model)
+            self.gaze_model_path = model_path
             if model_path is not None:
                 gaze_model = OnnxGazeEstimator(model_path)
                 log.info("gaze model: %s", model_path)
@@ -458,6 +461,11 @@ class GazeOSApp(QObject):
             self.overlay.show_toast(f"Calibration score {outcome.validation.score}/100", 4)
 
     def _apply_calibration(self, outcome: CalibrationOutcome) -> None:
+        if self.gaze_model_path is not None and self.settings.gaze_model != str(self.gaze_model_path):
+            # A calibration fits one model's outputs: keep using that model ("auto" could pick
+            # another on a busier day, and the fit would no longer apply).
+            self.settings.gaze_model = str(self.gaze_model_path)
+            self.profile.save_settings(self.settings)
         self.personalizer = outcome.personalizer
         self.samples = outcome.samples
         self.engine.personalizer = self.personalizer
