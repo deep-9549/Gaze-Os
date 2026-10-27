@@ -383,3 +383,20 @@ def test_consistency_training_sees_two_views_of_each_sample(tmp_path) -> None:
     with initialize_config_dir(config_dir=config_dir, version_base="1.3"):
         result = train(compose("train", overrides=overrides))
     assert np.isfinite(result["history"][0]["train_loss"])
+
+
+def test_uncertainty_fit_survives_a_nearly_constant_feature() -> None:
+    """A dead unit (near-constant feature) that varies a little on new samples must not
+    push the fitted log-variance to its clamp (E12 fold 2: median sigma 56 deg)."""
+    from training.fit_uncertainty import fit_head, log_var
+
+    rng = np.random.default_rng(0)
+    feats = rng.normal(size=(2000, 16)).astype(np.float32)
+    feats[:, 3] = 1e-7 * rng.normal(size=2000)
+    err = np.abs(rng.normal(0, 3, (2000, 2))) * (1 + np.abs(feats[:, :1]))
+    w, b = fit_head(feats, err)
+    test = rng.normal(size=(500, 16)).astype(np.float32)
+    test[:, 3] = 0.05 * rng.normal(size=500)  # the dead unit wakes up a little
+    sigma_deg = np.degrees(np.sqrt(np.exp(log_var(test, w, b))))
+    assert np.median(sigma_deg) < 20
+    assert sigma_deg.min() >= 0.49 and sigma_deg.max() <= 58  # the plausible range

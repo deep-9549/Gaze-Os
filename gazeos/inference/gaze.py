@@ -130,7 +130,8 @@ class OnnxGazeEstimator:
         pitch = float(decode_bins(outs["pitch_logits"][0], self.centers))
         yaw = float(decode_bins(outs["yaw_logits"][0], self.centers))
         if "log_var" in outs:
-            sigma = np.sqrt(np.exp(np.asarray(outs["log_var"][0], dtype=np.float64)))
+            # Kept between 0.5 and 57 deg: the linear variance head extrapolates (E12).
+            sigma = np.sqrt(np.exp(np.clip(np.asarray(outs["log_var"][0], dtype=np.float64), -9.5, 0.0)))
         else:
             sigma = np.radians(np.array([3.0, 3.0]))
         py_n = np.array([pitch, yaw])
