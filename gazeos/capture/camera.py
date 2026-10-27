@@ -32,24 +32,36 @@ class FrameSource(Protocol):
     def release(self) -> None: ...
 
 
-def _backend() -> int:
+def _backends() -> tuple[int, ...]:
+    """Capture backends to try, in order. On some Windows laptops Media Foundation
+    cannot open the built-in webcam at all while DirectShow can."""
     if sys.platform == "win32":
-        return cv2.CAP_MSMF
+        return (cv2.CAP_MSMF, cv2.CAP_DSHOW)
     if sys.platform == "darwin":
-        return cv2.CAP_AVFOUNDATION
-    return cv2.CAP_V4L2
+        return (cv2.CAP_AVFOUNDATION,)
+    return (cv2.CAP_V4L2,)
+
+
+def _open_working(index: int, configure=lambda cap: None) -> cv2.VideoCapture | None:  # type: ignore[no-untyped-def]
+    """First backend that opens camera `index` and returns a frame, or None."""
+    for backend in _backends():
+        cap = cv2.VideoCapture(index, backend)
+        if cap.isOpened():
+            configure(cap)
+            if cap.read()[0]:
+                return cap
+        cap.release()
+    return None
 
 
 def list_cameras(max_index: int = 6) -> list[int]:
     """Indices of cameras that open and return a frame (FR-01)."""
     found = []
     for i in range(max_index):
-        cap = cv2.VideoCapture(i, _backend())
-        if cap.isOpened():
-            ok, _ = cap.read()
-            if ok:
-                found.append(i)
-        cap.release()
+        cap = _open_working(i)
+        if cap is not None:
+            found.append(i)
+            cap.release()
     return found
 
 
@@ -58,12 +70,16 @@ class OpenCVSource:
         self.index, self.width, self.height, self.fps = index, width, height, fps
         self.cap = self._open()
 
-    def _open(self) -> cv2.VideoCapture:
-        cap = cv2.VideoCapture(self.index, _backend())
+    def _configure(self, cap: cv2.VideoCapture) -> None:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         cap.set(cv2.CAP_PROP_FPS, self.fps)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    def _open(self) -> cv2.VideoCapture:
+        cap = _open_working(self.index, self._configure)
+        if cap is None:  # keep a closed capture; CaptureThread retries via reopen()
+            cap = cv2.VideoCapture()
         return cap
 
     def lock_exposure(self) -> None:
