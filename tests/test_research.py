@@ -125,3 +125,24 @@ def test_figures_render(tmp_path) -> None:
     figures.grouped_breakdown({"Lighting": {"bright": 1.8, "dim": 2.4}}, tmp_path / "d.png")
     figures.scatter_speed_accuracy(["M3", "M4"], [20.0, 6.0], [1.7, 1.9], tmp_path / "e.png")
     assert len(list(tmp_path.glob("*.png"))) == 5
+
+
+def test_ablation_table_compares_each_arm_with_e1_on_the_same_folds(tmp_path) -> None:
+    import json
+
+    from research.ablation_table import table
+
+    def run(d, err):
+        d.mkdir(parents=True)
+        (d / "result.json").write_text(json.dumps({"test": {"mean_error_deg": err}}))
+
+    e1 = tmp_path / "e1"
+    for f, err in enumerate([3.0, 4.0, 5.0]):
+        run(e1 / f"fold{f}", err)
+        run(e1 / "seed1" / f"fold{f}", err + 0.3)
+        run(e1 / "seed2" / f"fold{f}", err - 0.1)
+    run(tmp_path / "e2" / "eyes_only" / "fold0", 3.5)  # only fold 0 done: compared on fold 0 only
+    r = table([tmp_path / "e2"], e1)
+    assert r["e1_seed0"]["seed_spread_deg"] == pytest.approx(0.4)
+    arm = r["arms"]["e2/eyes_only"]
+    assert arm["folds_done"] == 1 and arm["delta_vs_e1"] == pytest.approx(0.5)
