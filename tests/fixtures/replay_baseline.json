@@ -1,6 +1,6 @@
 {
-  "mean_error_px": 47.85,
-  "jitter_px": 8.24,
+  "mean_error_px": 53.5,
+  "jitter_px": 1.76,
   "note": "Synthetic replay session; regenerate with tests/fixtures/README.md when the pipeline intentionally changes.",
-  "changed": "2026-10-27: saccade jump rule (ADR 0006, 7 deg) replaced the 30 deg/s velocity rule and partly closed lids give no gaze sample. On this near-noiseless session error +6.8%, jitter -2.7% vs the old baseline (44.82, 8.47); on a real webcam fixation RMS precision 1.66 -> 0.68 deg."
+  "changed": "2026-10-27 (late): fixation hold with a 0.75 deg dead band, glide 0.3, locking 0.3 s after the last real move (ADR 0008). On this near-noiseless session jitter -79% (8.24 -> 1.76) and mean error +12% (47.85 -> 53.5: the simulated eye converges smoothly and the hold lags it); on the developer's webcam recording jitter -24 to -35% with the cursor still 47-61% of frames instead of 13-21%. Before: 47.85 / 8.24."
 }

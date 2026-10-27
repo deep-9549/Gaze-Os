@@ -163,14 +163,14 @@ class GazeOSApp(QObject):
             from gazeos.vision.landmarks import FaceLandmarker
 
             landmarker = FaceLandmarker()
-            model_path = Path(self.settings.gaze_model)
-            if model_path.exists():
-                from gazeos.inference.gaze import OnnxGazeEstimator
+            from gazeos.inference.gaze import OnnxGazeEstimator, resolve_gaze_model
 
+            model_path = resolve_gaze_model(self.settings.gaze_model)
+            if model_path is not None:
                 gaze_model = OnnxGazeEstimator(model_path)
                 log.info("gaze model: %s", model_path)
             else:
-                log.warning("gaze model %s not found; using the geometric M0 baseline", model_path)
+                log.warning("gaze model %s not found; using the geometric M0 baseline", self.settings.gaze_model)
         if self.settings.gesture_model and Path(self.settings.gesture_model).exists():
             from gazeos.inference.gesture import OnnxGestureClassifier
 

@@ -100,11 +100,15 @@ class ControlEngine:
             dispersion_deg=settings.fixation.dispersion_deg,
             min_fixation_ms=settings.fixation.min_fixation_ms,
             confirm_frames=settings.fixation.saccade_confirm_frames,
+            hold_deadband_deg=settings.fixation.hold_deadband_deg,
+            hold_ease=settings.fixation.hold_ease,
+            hold_lock_after_s=settings.fixation.hold_lock_after_ms / 1000.0,
         )
         self.dwell = DwellClicker(
             settings.dwell.dwell_ms, settings.dwell.radius_deg * self.px_per_deg, settings.dwell.cooldown_ms
         )
         self.snapper = TargetSnapper(settings.snap.probability_threshold, settings.snap.radius_sigmas)
+        self._dwell_target: GazeTarget | None = None
         self.action = Action.LEFT
         self.dragging = False
         self.paused = False
@@ -229,7 +233,7 @@ class ControlEngine:
             # Dwell.
             dwell_enabled = self.s.dwell.enabled and self.s.mode != ControlMode.HYBRID
             if point is not None and dwell_enabled and not self._in_scroll_zone(cursor):
-                upd = self.dwell.update(t, cursor)
+                upd = self.dwell.update(t, self._dwell_point(cursor))
                 state, progress = upd.state, upd.progress
                 if upd.fired and upd.anchor is not None:
                     events.append(self._fire(upd.anchor, t, source="dwell"))
@@ -282,6 +286,23 @@ class ControlEngine:
         margin = self.px_per_deg  # within 1 degree of an edge, snap onto it
         point = magnetic_edges(point, self.geometry.width_px, self.geometry.height_px, margin)
         return point, sigma_px
+
+    def _dwell_point(self, cursor: FloatArray) -> FloatArray:
+        """Where the dwell clicker should see the cursor. On GazeOS's own targets (keys,
+        action bar) dwell counts per target: while the cursor stays on one it sees the
+        target's centre, so wandering inside a large key does not restart the ring; a
+        margin keeps the target through a one-frame wobble across its border."""
+        x, y = float(cursor[0]), float(cursor[1])
+        cur = self._dwell_target
+        if cur is not None:
+            r = cur.rect
+            m = min(self.s.dwell.target_margin_deg * self.px_per_deg, 0.25 * min(r.width, r.height))
+            if r.left - m <= x < r.left + r.width + m and r.top - m <= y < r.top + r.height + m:
+                return np.asarray(r.center, dtype=np.float64)
+        self._dwell_target = self.registry.hit(x, y)
+        if self._dwell_target is None:
+            return cursor
+        return np.asarray(self._dwell_target.rect.center, dtype=np.float64)
 
     def _head_fine_tune(self, point: FloatArray, obs: GazeObservation) -> FloatArray:
         head = np.asarray(obs.head_pyr[:2], dtype=np.float64)

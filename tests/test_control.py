@@ -309,3 +309,30 @@ def test_old_profile_with_velocity_rule_still_loads() -> None:
 
     s = Settings.model_validate({"fixation": {"saccade_velocity_deg_s": 30.0, "dispersion_deg": 1.0}})
     assert s.fixation.saccade_jump_deg == 7.0
+
+
+def test_fixation_dead_band_holds_the_cursor_still(rng) -> None:
+    """With webcam-like noise the held point stops trembling, and a real move still moves it."""
+    det = FixationDetector(px_per_deg=58.0, hold_deadband_deg=0.75, hold_ease=0.3, hold_lock_after_s=0.3)
+    pts = []
+    for i, p in enumerate(_jitter(rng, 60, sigma=12.0)):
+        pts.append(det.update(i / 30, p, p).point)
+    held = np.stack(pts[20:])
+    assert np.mean(np.linalg.norm(np.diff(held, axis=0), axis=1) == 0) > 0.8  # still in most frames
+    moved = [det.update((60 + i) / 30, np.array([560.0, 400.0]), np.array([560.0, 400.0])).point for i in range(30)]
+    assert np.linalg.norm(moved[-1] - np.array([560.0, 400.0])) < 5
+
+
+def test_dwell_counts_per_key_on_large_gazeos_targets(settings, geometry) -> None:
+    """Wandering inside a large key (further than the 1.5 deg dwell radius from where the
+    dwell began) used to restart the ring; on GazeOS's own targets it now keeps counting."""
+    pressed = []
+    reg = TargetRegistry()
+    reg.register(GazeTarget("kb:key_a", Rect(600, 400, 260, 200), lambda: pressed.append("a")))
+    eng, _ = _engine(settings, geometry, registry=reg)
+    t = 0.0
+    for i in range(36):  # 1.2 s, alternating between two spots 150 px apart inside the key
+        t += 1 / 30
+        x = 650 if (i // 6) % 2 == 0 else 800
+        eng.update(EngineInput(t, _obs((x, 500)), OK))
+    assert pressed == ["a"]

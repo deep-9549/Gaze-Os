@@ -86,6 +86,13 @@ class FixationSettings(_Section):
     saccade_confirm_frames: int = Field(2, ge=1)
     dispersion_deg: float = 1.0
     min_fixation_ms: float = 100.0
+    # While fixating, the cursor glides to the fixation's median (`hold_ease` of the way per
+    # frame) and stays put while the median stays within the dead band, from
+    # `hold_lock_after_ms` after its last real move. On the developer's webcam after
+    # calibration: still in 47-61% of frames instead of 13-21%, 24-35% less jitter (ADR 0008).
+    hold_deadband_deg: float = Field(0.75, ge=0.0)
+    hold_ease: float = Field(0.3, gt=0.0, le=1.0)
+    hold_lock_after_ms: float = Field(300.0, ge=0.0)
 
     @model_validator(mode="before")
     @classmethod
@@ -100,6 +107,8 @@ class DwellSettings(_Section):
     dwell_ms: float = Field(800.0, ge=300.0, le=2000.0)
     radius_deg: float = Field(1.5, gt=0)
     cooldown_ms: float = Field(500.0, ge=0)
+    # On GazeOS's own targets dwell counts per target; leaving one needs this much margin.
+    target_margin_deg: float = Field(0.5, ge=0.0)
     enabled: bool = True
 
 
@@ -214,8 +223,9 @@ class Settings(_Section):
     typing: TypingSettings = Field(default_factory=TypingSettings)
     calibration: CalibrationSettings = Field(default_factory=CalibrationSettings)
     privacy: PrivacySettings = Field(default_factory=PrivacySettings)
-    # fp32 M4: 2 ms/frame on the laptop CPU, inside the 8 ms budget; static INT8 lost 1.2° and
-    # ran slower, so it was rejected (docs/PLAN.md step 22).
-    gaze_model: str = "models/gazenet_lite.onnx"
+    # A model path, or "auto": M3 when this CPU runs it within 15 ms per frame (on the
+    # developer's webcam 27% more accurate after calibration and 23% less noisy than M4,
+    # ADR 0008), else the fp32 M4 (2.5 ms; static INT8 lost 1.2° and was rejected).
+    gaze_model: str = "auto"
     gesture_model: str | None = "models/gesture_tcn.onnx"
     theme: Literal["default", "high_contrast", "large_text"] = "default"

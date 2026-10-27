@@ -43,10 +43,20 @@ class FixationDetector:
         hold_window_s: float = 0.5,
         settle_s: float = 0.15,
         confirm_frames: int = 2,
+        hold_deadband_deg: float = 0.0,
+        hold_ease: float = 1.0,
+        hold_lock_after_s: float = 0.0,
     ) -> None:
         self.px_per_deg = px_per_deg
         self.jump_px = saccade_jump_deg * px_per_deg
         self.confirm_frames = confirm_frames
+        self.deadband_px = hold_deadband_deg * px_per_deg
+        self.hold_ease = hold_ease
+        # The dead band locks only once the fixation has settled, so it cannot stop the
+        # cursor short while the median is still catching up with the eye.
+        self.hold_lock_after_s = hold_lock_after_s
+        self._held_since = 0.0
+        self._shown: FloatArray | None = None  # point held during the current fixation
         self._jumps: list[FloatArray] = []  # offsets of the current saccade candidate
         self.dispersion_px = dispersion_deg * px_per_deg
         self.min_fix_s = min_fixation_ms / 1000.0
@@ -60,6 +70,7 @@ class FixationDetector:
         self._window.clear()
         self._last = None
         self._jumps = []
+        self._shown = None
         self.in_fixation = False
 
     def update(self, t: float, raw: FloatArray, filtered: FloatArray) -> FixationOutput:
@@ -86,6 +97,7 @@ class FixationDetector:
         if saccade:
             self._window.clear()
             self._jumps = []
+            self._shown = None
             self._last = (t, raw.copy())  # the engine restarts its filter at the raw point
             self.in_fixation = False
             return FixationOutput(EyeEvent.SACCADE, raw.copy(), saccade_started=True)
@@ -110,7 +122,21 @@ class FixationDetector:
         if duration >= self.min_fix_s:
             self.in_fixation = True
             held = np.stack([p for ts, p in self._window if t - ts <= self.hold_window_s])
-            return FixationOutput(EyeEvent.FIXATION, np.median(held, axis=0))
+            point = np.median(held, axis=0)
+            # Dead band: keep the shown point until the median moves clearly, then glide to it,
+            # so the cursor sits still instead of trembling with the network's noise.
+            if self._shown is None:
+                self._held_since = t
+            elif float(np.linalg.norm(point - self._shown)) >= self.deadband_px:
+                self._held_since = t  # a real move: follow it fully before locking again
+                point = self._shown + self.hold_ease * (point - self._shown)
+            elif t - self._held_since < self.hold_lock_after_s:
+                point = self._shown + self.hold_ease * (point - self._shown)
+            else:
+                point = self._shown
+            self._shown = point.copy()
+            return FixationOutput(EyeEvent.FIXATION, point.copy())
+        self._shown = None
         return FixationOutput(EyeEvent.MOVING, filtered.copy())
 
     @staticmethod

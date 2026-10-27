@@ -36,10 +36,11 @@ def profile(seconds: float, simulate: bool, model: str | None, camera: int) -> d
     geometry = ScreenGeometry.from_settings(s.screen)
     K = CameraIntrinsics.default(s.camera.width, s.camera.height)
     gaze = None
-    if not simulate and Path(s.gaze_model).exists():  # same default as the app; synthetic frames have no image
-        from gazeos.inference.gaze import OnnxGazeEstimator
+    from gazeos.inference.gaze import OnnxGazeEstimator, resolve_gaze_model
 
-        gaze = OnnxGazeEstimator(s.gaze_model)
+    path = None if simulate else resolve_gaze_model(s.gaze_model)  # as the app; synthetic frames have no image
+    if path is not None:
+        gaze = OnnxGazeEstimator(path)
     proc_ = psutil.Process()
     timings: dict[str, list[float]] = defaultdict(list)
     engine = ControlEngine(s, geometry, RecordingBackend())
