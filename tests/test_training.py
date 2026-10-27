@@ -334,3 +334,27 @@ def test_fit_uncertainty_changes_only_the_variance_head(tmp_path) -> None:
     old = model.state_dict()
     assert all(torch.equal(new[k], old[k]) for k in old if not k.startswith("var_head"))
     assert not torch.equal(new["var_head.weight"], old["var_head.weight"])
+
+
+def test_camera_calibration_recovers_focal_length(tmp_path) -> None:
+    """Views of the generated board through a known camera give back its focal length."""
+    import cv2
+
+    from tools.camera_calibration import calibrate, is_new_view, make_board
+
+    board = cv2.imread(str(make_board(tmp_path / "b.png", 9, 6, square_px=40, margin_px=40)), cv2.IMREAD_GRAYSCALE)
+    bh, bw = board.shape
+    K = np.array([[520.0, 0, 320], [0, 520.0, 240], [0, 0, 1]])
+    rng = np.random.default_rng(0)
+    views = []
+    for _ in range(12):
+        rvec = rng.uniform(-0.35, 0.35, 3)
+        tvec = np.array([rng.uniform(-60, 60), rng.uniform(-40, 40), rng.uniform(420, 600)])
+        obj = np.array([[0, 0, 0], [bw, 0, 0], [bw, bh, 0], [0, bh, 0]], np.float64) * 0.5 - [bw / 4, bh / 4, 0]
+        img_pts, _ = cv2.projectPoints(obj, rvec, tvec, K, None)
+        H = cv2.getPerspectiveTransform(np.float32([[0, 0], [bw, 0], [bw, bh], [0, bh]]), img_pts.reshape(4, 2).astype(np.float32))
+        views.append(cv2.warpPerspective(board, H, (640, 480), borderValue=255))
+    intr, rms = calibrate(views, (9, 6), 20.0)
+    assert abs(intr.matrix[0, 0] - 520) < 15 and rms < 1.0
+    corners = np.zeros((54, 1, 2), np.float32)
+    assert is_new_view(corners, [], 640) and not is_new_view(corners, [corners + 5], 640)

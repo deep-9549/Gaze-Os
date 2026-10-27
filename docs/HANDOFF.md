@@ -71,7 +71,7 @@ Upload the shards (not the raw datasets) to a private Kaggle dataset.
 - [ ] Windows checks no container can do: clicks land on the right pixel at 125% and 150% display scaling;
       the keyboard and action bar never steal focus; UI Automation snapping works in a browser and in
       Explorer; text-to-speech speaks.
-- [ ] Optional: `python -m tools.camera_calibration` with a printed checkerboard (ablation E4).
+- [ ] Camera intrinsics (ablation E4): `python -m tools.camera_calibration --make-board board.png`, show it full screen on a phone (or print it), then `python -m tools.camera_calibration --profile default`.
 
 ## 5. User study (weeks 9-13, after approval)
 
