@@ -157,7 +157,7 @@ whether formal ethics approval is needed; the user recording themselves needs no
 
 | Day | Work | Needs the user | Status |
 | --- | --- | --- | --- |
-| 1 | Reboot; seeds 1-2 summary (E1 mean ± SD) and a 3-seed offline ensemble row; latency profile + 10-min soak; first `gazeos --dry-run` on the webcam and fixes | About 30 min | Seeds and ensemble done (05:30): 4.78° ± 0.09°, ensemble 4.65°. Simulated 10-min soak passed (29.3 fps, memory +6.7 MB, limit 50 MB; no camera or network in simulation). Camera latency, camera soak and dry-run to do |
+| 1 | Reboot; seeds 1-2 summary (E1 mean ± SD) and a 3-seed offline ensemble row; latency profile + 10-min soak; first `gazeos --dry-run` on the webcam and fixes | About 30 min | Seeds and ensemble done (05:30): 4.78° ± 0.09°, ensemble 4.65°. Simulated 10-min soak passed (29.3 fps, memory +6.7 MB, limit 50 MB; no camera or network in simulation). Camera latency (27 Oct evening): 28.4 fps, frame-to-cursor median 16 ms / p95 31 ms, gaze net 3.2 ms, landmarks 11.6 ms (over its 8 ms budget), CPU 22%. First dry-run found and fixed: webcam needed DirectShow (Media Foundation gives no frames) with auto exposure switched on; cursor hidden behind other windows; cursor jitter from false saccade resets and blinks (ADR 0006: precision 1.66 -> 0.68 deg before calibration). Camera soak and the calibrated dry-run to do |
 | 1-2 | Pilot GazeOS-Webcam data: `tools/collect.py`, 3 sessions of about 15 min per person (user, then friends with consent) | About 1 h | To do |
 | 2-3 | E6 personalization on the pilot data: P0-P4 with 1/3/5/9/16 points (the PRD 2° target) | No | To do |
 | 2 (night) | E2 and E3 ablations on folds 0-2 (about 6 GPU h) | No | To do |
@@ -200,6 +200,7 @@ clustered at 9 points.
 
 | Date | Change |
 | --- | --- |
+| 2026-10-27 | Evening, first webcam session: four app fixes (DirectShow fallback and auto exposure; overlay above other windows; saccade jump rule; no gaze sample while the lids close, ADR 0006). Network noise on the webcam is about 1.8 deg per frame vertically, 1.1-1.5 deg horizontally. |
 | 2026-10-27 | Seeds 1-2 finished at 05:08 (30 runs, no failures; seed means 4.84° and 4.68°). E1: 4.78° ± 0.09° over 3 seeds; 3-seed ensemble 4.65°. Both still above the 4.5° target; seed-to-seed spread (0.09°) is much smaller than fold-to-fold spread (1.3°), so the subjects, not the seeds, drive the number. |
 | 2026-10-25 | Plan written. Data audit of `F:\GazeOS-data`: MPIIFaceGaze 4 of 15 subjects; RT-GENE s004 truncated, s005 and s006 missing. RT-GENE label order verified. Google Drive (5 TB) added for shards and checkpoints. |
 | 2026-10-26 | Phase 0 done. MediaPipe resolved to 1.1.1 (newer than the code was written against); the unit tests pass, but check landmarks on a live webcam with `gazeos --dry-run`. Synthetic shards take about 190 KB per sample, so expect roughly 10-20 GB for RT-GENE. |
