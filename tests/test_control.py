@@ -76,8 +76,8 @@ def test_fixation_detector(rng) -> None:
     for i, p in enumerate(_jitter(rng, 30, sigma=5.0)):
         events.append(det.update(i / 30, p, p).event)
     assert EyeEvent.FIXATION in events
-    # A 7 degree jump needs a second frame (one frame could be noise); the filter trails it.
-    near, lagging = np.array([500.0 + 7 * 58.0, 400.0]), np.array([550.0, 400.0])
+    # A 9 degree jump needs a second frame (one frame could be noise); the filter trails it.
+    near, lagging = np.array([500.0 + 9 * 58.0, 400.0]), np.array([550.0, 400.0])
     assert not det.update(31 / 30, near, lagging).saccade_started
     out = det.update(32 / 30, near, lagging)
     assert out.event == EyeEvent.SACCADE and out.saccade_started
@@ -308,4 +308,4 @@ def test_old_profile_with_velocity_rule_still_loads() -> None:
     from gazeos.settings import Settings
 
     s = Settings.model_validate({"fixation": {"saccade_velocity_deg_s": 30.0, "dispersion_deg": 1.0}})
-    assert s.fixation.saccade_jump_deg == 5.0
+    assert s.fixation.saccade_jump_deg == 7.0

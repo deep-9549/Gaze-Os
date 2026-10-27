@@ -49,6 +49,10 @@ class QualitySettings(_Section):
     min_inter_eye_px: float = 60.0
     max_head_angle_deg: float = 35.0
     blink_score_threshold: float = 0.5
+    # Partly closed lids pull the gaze down by 3-10 degrees before a blink counts as
+    # closed; frames with either eye's blink score above this give no gaze sample.
+    gaze_lid_threshold: float = Field(0.3, ge=0.0, le=1.0)
+    gaze_lid_hold_frames: int = Field(1, ge=0)  # and this many frames after
     min_brightness: float = 50.0
     face_lost_pause_s: float = 1.0
     head_pose_disagreement_deg: float = 10.0
@@ -69,7 +73,7 @@ class FilterSettings(_Section):
 class FixationSettings(_Section):
     # A saccade is a jump of the raw gaze away from the cursor, confirmed on consecutive
     # frames; the PRD's 30 deg/s velocity rule fires on webcam noise (ADR 0006).
-    saccade_jump_deg: float = Field(5.0, gt=0)
+    saccade_jump_deg: float = Field(7.0, gt=0)
     saccade_confirm_frames: int = Field(2, ge=1)
     dispersion_deg: float = 1.0
     min_fixation_ms: float = 100.0

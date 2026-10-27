@@ -1,6 +1,6 @@
 {
-  "mean_error_px": 37.51,
-  "jitter_px": 8.94,
+  "mean_error_px": 47.85,
+  "jitter_px": 8.24,
   "note": "Synthetic replay session; regenerate with tests/fixtures/README.md when the pipeline intentionally changes.",
-  "changed": "2026-10-27: saccade jump rule (ADR 0006) replaced the 30 deg/s velocity rule; error -16%, jitter +5.5% on this near-noiseless session, about 4x less jitter on real webcam noise."
+  "changed": "2026-10-27: saccade jump rule (ADR 0006, 7 deg) replaced the 30 deg/s velocity rule and partly closed lids give no gaze sample. On this near-noiseless session error +6.8%, jitter -2.7% vs the old baseline (44.82, 8.47); on a real webcam fixation RMS precision 1.66 -> 0.68 deg."
 }

@@ -84,6 +84,7 @@ class FrameProcessor:
         self.window = FeatureWindow()
         self.gestures = GestureEventDetector(settings.gestures.probability_threshold, settings.gestures.refractory_ms)
         self._prev_head: tuple[float, float, float] | None = None
+        self._lid_hold = 0  # frames left without a gaze sample after a partly closed lid
 
     def process_image(self, image_rgb: NDArray[np.uint8], t: float) -> ProcessedFrame:
         if self.landmarker is None:
@@ -133,6 +134,10 @@ class FrameProcessor:
         blink_score = max(lm.blendshapes.get("eyeBlinkLeft", 0.0), lm.blendshapes.get("eyeBlinkRight", 0.0)) \
             if lm.blendshapes else (1.0 if state.both_closed else 0.0)
         blink_event = self.blinks.update(t, state)
+        if blink_score > self.s.quality.gaze_lid_threshold:
+            self._lid_hold = self.s.quality.gaze_lid_hold_frames + 1
+        lid_down = self._lid_hold > 0
+        self._lid_hold = max(self._lid_hold - 1, 0)
 
         brightness = 255.0
         if image_rgb is not None:
@@ -196,6 +201,8 @@ class FrameProcessor:
         res.quality_ok = q.ok
         res.eye_closed = state.both_closed
         res.timings_ms.update(timings)
+        if lid_down:  # recorded in res for analysis, but neither cursor nor calibration use it
+            obs = None
         inp = EngineInput(t, obs, q, blink_event=blink_event, gesture_event=gesture_event,
                           eyes_closed=state.both_closed)
         return ProcessedFrame(res, inp, norm, pose, estimate, obs)

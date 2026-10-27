@@ -1,7 +1,7 @@
 """Fixation and saccade detection (PRD 12.4, FR-15).
 
-Saccade: the raw gaze lands more than 5 degrees from the smoothed cursor on two
-consecutive frames in the same direction, or more than 10 degrees on one frame.
+Saccade: the raw gaze lands more than 7 degrees from the smoothed cursor on two
+consecutive frames in the same direction, or more than 14 degrees on one frame.
 The PRD's velocity rule (30 deg/s) fires on webcam noise alone; see ADR 0006.
 I-DT: samples staying within 1 degree for at least 100 ms form a fixation;
 during a fixation the cursor sits at the running median of its samples.
@@ -36,7 +36,7 @@ class FixationDetector:
     def __init__(
         self,
         px_per_deg: float,
-        saccade_jump_deg: float = 5.0,
+        saccade_jump_deg: float = 7.0,
         dispersion_deg: float = 1.0,
         min_fixation_ms: float = 100.0,
         max_window: int = 90,
