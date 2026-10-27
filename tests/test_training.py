@@ -307,3 +307,30 @@ def test_small_gpt_exports_dynamic_length(tmp_path) -> None:
     for T in (3, 11):
         out = sess.run(None, {"tokens": np.zeros((1, T), np.int64)})[0]
         assert out.shape == (1, T, 50)
+
+
+def test_fit_uncertainty_changes_only_the_variance_head(tmp_path) -> None:
+    from training.fit_uncertainty import fit, fit_head, log_var
+
+    rng = np.random.default_rng(0)
+    feats = rng.normal(size=(2000, 8)).astype(np.float32)
+    sigma = np.exp(0.5 * feats[:, :1])  # the error scale depends on the first feature
+    err = rng.normal(size=(2000, 2)) * sigma
+    w, b = fit_head(feats, err, steps=300)
+    from scipy.stats import spearmanr
+
+    assert spearmanr(log_var(feats, w, b)[:, 0], np.abs(err[:, 0])).correlation > 0.3
+
+    pack_synthetic(str(tmp_path / "s"), subjects=4, per_subject=6)
+    model = GazeNetGOS("mobilenet_v3_small", pretrained=False).eval()
+    cfg = {"model": {"backbone": "mobilenet_v3_small", "use_eyes": True, "use_head": True, "use_face": True,
+                     "fusion": "transformer", "num_bins": 28, "dropout": 0.3},
+           "data": {"shards": [str(tmp_path / "s" / "*.h5")], "fold": None, "val_fraction": 0.25}, "seed": 0}
+    torch.save({"model": model.state_dict(), "config": cfg}, tmp_path / "best.pt")
+    report = fit(tmp_path / "best.pt", tmp_path / "best_unc.pt", workers=0)
+    assert report["calibrated_on"] == "val" and report["val"]["n"] == 6
+    assert abs(np.mean(report["val"]["mean_z2_after"]) - 1.0) < 0.05  # sigma calibrated on validation subjects
+    new = torch.load(tmp_path / "best_unc.pt")["model"]
+    old = model.state_dict()
+    assert all(torch.equal(new[k], old[k]) for k in old if not k.startswith("var_head"))
+    assert not torch.equal(new["var_head.weight"], old["var_head.weight"])
