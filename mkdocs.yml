@@ -26,6 +26,7 @@ nav:
       - Saccades: adr/0006-saccade-jump-rule.md
       - Lids and blink gestures: adr/0007-lids-and-blink-gestures.md
       - Steadier cursor and model choice: adr/0008-steadier-cursor-and-model-choice.md
+      - Implicit recalibration off: adr/0009-implicit-recalibration-off.md
   - User study: study/README.md
   - Model card template: models/MODEL_CARD_TEMPLATE.md
   - Third-party material: THIRD_PARTY.md

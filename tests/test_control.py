@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from gazeos.calibration.implicit import ImplicitRecalibrator
+from gazeos.calibration.personalization import NoPersonalization
 from gazeos.calibration.protocol import GazeObservation
 from gazeos.control.dwell import DwellClicker
 from gazeos.control.engine import Action, ControlEngine, EngineInput
@@ -321,6 +323,22 @@ def test_fixation_dead_band_holds_the_cursor_still(rng) -> None:
     assert np.mean(np.linalg.norm(np.diff(held, axis=0), axis=1) == 0) > 0.8  # still in most frames
     moved = [det.update((60 + i) / 30, np.array([560.0, 400.0]), np.array([560.0, 400.0])).point for i in range(30)]
     assert np.linalg.norm(moved[-1] - np.array([560.0, 400.0])) < 5
+
+
+def test_typing_leaves_the_calibration_alone_by_default(settings, geometry) -> None:
+    """A gaze-typed key is labelled by the tracker's own cursor, so learning from it locked
+    in the tracker's error (ADR 0009); implicit recalibration only runs when enabled."""
+    pressed = []
+    reg = TargetRegistry()
+    reg.register(GazeTarget("kb:key_a", Rect(600, 400, 260, 200), lambda: pressed.append("a")))
+    reg.register(GazeTarget("kb:key_b", Rect(1100, 400, 260, 200), lambda: pressed.append("b")))
+    rec = ImplicitRecalibrator(NoPersonalization(geometry), [], refit_every=1, background=False)
+    eng = ControlEngine(settings, geometry, RecordingBackend(), registry=reg, recalibrator=rec)
+    _, t = _run(eng, (700, 500), 1.5)
+    assert pressed == ["a"] and rec.implicit == []
+    settings.calibration.implicit_enabled = True
+    _run(eng, (1200, 500), 1.5, t0=t)
+    assert pressed == ["a", "b"] and rec.implicit
 
 
 def test_dwell_counts_per_key_on_large_gazeos_targets(settings, geometry) -> None:

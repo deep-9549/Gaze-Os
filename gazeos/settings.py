@@ -196,7 +196,9 @@ class CalibrationSettings(_Section):
     # and calibration stops rather than guess a missing area (REVIEW.md item 12).
     min_samples_per_point: int = Field(10, ge=1)
     method: Literal["none", "offset", "polynomial", "gp", "finetune"] = "polynomial"
-    implicit_enabled: bool = True
+    # Off: a gaze click lands where the cursor is, so its label repeats the tracker's own
+    # error; 20 typed keys moved the Space row 9-10 mm up (ADR 0009).
+    implicit_enabled: bool = False
     implicit_refit_every: int = 20
     implicit_decay_min: float = 30.0
 

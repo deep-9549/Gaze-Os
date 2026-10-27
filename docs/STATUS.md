@@ -21,7 +21,7 @@ be done without a person, data access, GPUs or approvals (see HANDOFF.md).
 | FR-09 | 9-point calibration in <= 30 s | P0 | Done | `ui/calibration.py` |
 | FR-10 | Validation with per-point error and score | P0 | Done | `calibration/protocol.py` |
 | FR-11 | One-point drift correction | P1 | Done | menu "Quick fix" |
-| FR-12 | Implicit recalibration from clicks | P1 | Done | `calibration/implicit.py` |
+| FR-12 | Implicit recalibration from clicks | P1 | Done, off by default | `calibration/implicit.py`; gaze clicks teach the tracker its own error (ADR 0009) |
 | FR-13 | Save/load calibration per profile | P0 | Done | `profiles/store.py` |
 | FR-14 | Adaptive smoothing | P0 | Done | `control/filters.py` |
 | FR-15 | Fixation hold | P0 | Done | `control/fixation.py` |
