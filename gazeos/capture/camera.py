@@ -42,6 +42,13 @@ def _backends() -> tuple[int, ...]:
     return (cv2.CAP_V4L2,)
 
 
+def _is_dshow(cap: cv2.VideoCapture) -> bool:
+    try:
+        return bool(cap.getBackendName() == "DSHOW")
+    except cv2.error:  # not opened
+        return False
+
+
 def _open_working(index: int, configure=lambda cap: None) -> cv2.VideoCapture | None:  # type: ignore[no-untyped-def]
     """First backend that opens camera `index` and returns a frame, or None."""
     for backend in _backends():
@@ -75,6 +82,9 @@ class OpenCVSource:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         cap.set(cv2.CAP_PROP_FPS, self.fps)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        if _is_dshow(cap):
+            # DirectShow can start with auto exposure off at a fixed, dark setting.
+            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75)
 
     def _open(self) -> cv2.VideoCapture:
         cap = _open_working(self.index, self._configure)
@@ -84,6 +94,11 @@ class OpenCVSource:
 
     def lock_exposure(self) -> None:
         """Freeze auto exposure at its current value (FR-02)."""
+        if _is_dshow(self.cap):
+            # DirectShow reports the last manual value, not the one auto exposure chose,
+            # so freezing would jump back to a dark image. Keep auto exposure instead.
+            log.info("exposure lock not supported with DirectShow; keeping auto exposure")
+            return
         exposure = self.cap.get(cv2.CAP_PROP_EXPOSURE)
         # 0.25 means "manual" on V4L2 / DirectShow; 1 on some MSMF drivers.
         for manual in (0.25, 1.0):
