@@ -21,7 +21,7 @@ from gazeos.calibration.geometry import ScreenGeometry
 from gazeos.calibration.protocol import GazeObservation
 from gazeos.control.engine import ControlEngine, EngineInput, EngineOutput
 from gazeos.control.filters import OneEuroFilter
-from gazeos.gestures.blink import BlinkDetector, BlinkEvent, eye_state
+from gazeos.gestures.blink import BlinkDetector, BlinkEvent, LidGate, eye_state
 from gazeos.gestures.events import FeatureWindow, GestureEventDetector, scale_by_gesture_size
 from gazeos.inference.gaze import GazeEstimate, GeometricGazeEstimator
 from gazeos.settings import Settings
@@ -84,7 +84,8 @@ class FrameProcessor:
         self.window = FeatureWindow()
         self.gestures = GestureEventDetector(settings.gestures.probability_threshold, settings.gestures.refractory_ms)
         self._prev_head: tuple[float, float, float] | None = None
-        self._lid_hold = 0  # frames left without a gaze sample after a partly closed lid
+        q = settings.quality
+        self.lids = LidGate(q.lid_hidden_level, q.lid_speed, q.lid_hold_frames)
 
     def process_image(self, image_rgb: NDArray[np.uint8], t: float) -> ProcessedFrame:
         if self.landmarker is None:
@@ -108,6 +109,7 @@ class FrameProcessor:
             q = self.quality.check(t, 0)
             self.head.reset()
             self.blinks.reset()
+            self.lids.reset()
             res.status = q.status.value
             res.quality_ok = False
             return ProcessedFrame(res, EngineInput(t, None, q))
@@ -134,10 +136,7 @@ class FrameProcessor:
         blink_score = max(lm.blendshapes.get("eyeBlinkLeft", 0.0), lm.blendshapes.get("eyeBlinkRight", 0.0)) \
             if lm.blendshapes else (1.0 if state.both_closed else 0.0)
         blink_event = self.blinks.update(t, state)
-        if blink_score > self.s.quality.gaze_lid_threshold:
-            self._lid_hold = self.s.quality.gaze_lid_hold_frames + 1
-        lid_down = self._lid_hold > 0
-        self._lid_hold = max(self._lid_hold - 1, 0)
+        lid_down = not self.lids.update(blink_score)
 
         brightness = 255.0
         if image_rgb is not None:

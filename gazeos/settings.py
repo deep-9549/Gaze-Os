@@ -49,13 +49,22 @@ class QualitySettings(_Section):
     min_inter_eye_px: float = 60.0
     max_head_angle_deg: float = 35.0
     blink_score_threshold: float = 0.5
-    # Partly closed lids pull the gaze down by 3-10 degrees before a blink counts as
-    # closed; frames with either eye's blink score above this give no gaze sample.
-    gaze_lid_threshold: float = Field(0.3, ge=0.0, le=1.0)
-    gaze_lid_hold_frames: int = Field(1, ge=0)  # and this many frames after
+    # No gaze sample while a lid hides the iris or moves fast (a blink starting or ending),
+    # and for a few frames after; a lid lowered to look down is fine (ADR 0007).
+    lid_hidden_level: float = Field(0.45, ge=0.0, le=1.0)  # either eye's blink score
+    lid_speed: float = Field(0.1, gt=0.0)  # change of the blink score in one frame
+    lid_hold_frames: int = Field(2, ge=0)
     min_brightness: float = 50.0
     face_lost_pause_s: float = 1.0
     head_pose_disagreement_deg: float = 10.0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_old_lid_rule(cls, data: Any) -> Any:
+        """Profiles saved on 27 Oct 2026 carry the replaced fixed lid threshold."""
+        if isinstance(data, dict):
+            data = {k: v for k, v in data.items() if k not in ("gaze_lid_threshold", "gaze_lid_hold_frames")}
+        return data
 
 
 class FilterSettings(_Section):
@@ -99,6 +108,9 @@ class BlinkSettings(_Section):
     long_blink_max_ms: float = Field(1000.0, ge=300.0)
     wink_min_ms: float = Field(300.0, ge=100.0)
     pause_close_ms: float = Field(2000.0, ge=1000.0)
+    # Off by default: looking down at the keyboard reads as closed eyes on a laptop webcam
+    # (REVIEW.md item 12), so a 2 s glance toggled pause. The hotkey and corner still pause.
+    eyes_closed_pause: bool = False
     ear_threshold: float = Field(0.21, gt=0, lt=1)
     winks_enabled: bool = False
 

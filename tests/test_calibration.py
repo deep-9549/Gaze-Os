@@ -136,14 +136,15 @@ def test_implicit_recalibration(settings, geometry, intrinsics, user) -> None:
     assert rec.refits == 1
 
 
-def test_partly_closed_lids_give_no_gaze_sample(settings, geometry, intrinsics, user) -> None:
-    """A half-closed lid pulls the network's gaze 3-10 degrees down (measured on the
-    webcam), so those frames, and one after, neither move the cursor nor calibrate."""
+def test_blinking_lids_give_no_gaze_sample(settings, geometry, intrinsics, user) -> None:
+    """A lid moving fast (a blink) pulls the network's gaze 3-10 degrees down (measured on
+    the webcam), so those frames, and two after, neither move the cursor nor calibrate;
+    a steadily lowered lid (looking at the bottom of the screen) still does (ADR 0007)."""
     proc = FrameProcessor(settings, geometry, intrinsics, None)
     got = []
-    for i, score in enumerate([0.05, 0.4, 0.1, 0.1, 0.1]):
+    for i, score in enumerate([0.05, 0.6, 0.1, 0.1, 0.1, 0.1, 0.3, 0.35, 0.35, 0.35]):
         lm = user.look_at(960, 540)
         lm.blendshapes = {**(lm.blendshapes or {}), "eyeBlinkLeft": score, "eyeBlinkRight": 0.05}
         pf = proc.process_landmarks(lm, i / 30)
         got.append(pf.observation is not None and pf.engine_input.obs is not None)
-    assert got == [True, False, False, True, True]
+    assert got == [True, False, False, False, False, True, False, False, False, True]

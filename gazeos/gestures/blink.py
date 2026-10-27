@@ -3,7 +3,7 @@
 Events fire when the eyes reopen, so their duration is known:
 - long blink: both eyes closed 400-1000 ms -> click
 - wink: one eye closed >= 300 ms while the other stays open
-- both eyes closed >= 2 s -> pause / resume
+- both eyes closed >= 2 s -> pause / resume (off by default, `eyes_closed_pause`)
 Normal blinks (about 100-300 ms) never fire.
 """
 
@@ -54,6 +54,36 @@ def eye_state(
     return EyeState(left_closed=ear_left < ear_threshold, right_closed=ear_right < ear_threshold)
 
 
+class LidGate:
+    """Whether a frame's gaze is usable, from the larger of the two blink scores (ADR 0007).
+
+    Looking down lowers the upper lid and raises MediaPipe's blink score (about 0.2-0.3
+    at the bottom of a laptop screen) while the iris stays visible, so a fixed low
+    threshold throws away good frames. A frame is unusable when a lid hides the iris
+    (score above `hidden_level`) or moves fast (a blink starting or ending, when the
+    network reads the lid as the eye looking down), and for `hold_frames` after.
+    """
+
+    def __init__(self, hidden_level: float = 0.45, speed: float = 0.1, hold_frames: int = 2) -> None:
+        self.hidden_level, self.speed, self.hold_frames = hidden_level, speed, hold_frames
+        self._prev: float | None = None
+        self._hold = 0
+
+    def update(self, score: float) -> bool:
+        moving = self._prev is not None and abs(score - self._prev) > self.speed
+        self._prev = score
+        if score > self.hidden_level or moving:
+            self._hold = self.hold_frames
+            return False
+        if self._hold > 0:
+            self._hold -= 1
+            return False
+        return True
+
+    def reset(self) -> None:
+        self._prev, self._hold = None, 0
+
+
 class BlinkDetector:
     def __init__(self, settings: BlinkSettings | None = None) -> None:
         self.s = settings or BlinkSettings()
@@ -98,7 +128,7 @@ class BlinkDetector:
             dur = ms(self._both_start)
             self.last_closure_ms = dur
             if dur >= self.s.pause_close_ms:
-                return BlinkEvent.PAUSE_TOGGLE
+                return BlinkEvent.PAUSE_TOGGLE if self.s.eyes_closed_pause else None
             if self.s.long_blink_min_ms <= dur <= self.s.long_blink_max_ms:
                 return BlinkEvent.LONG_BLINK
             if dur < self.s.long_blink_min_ms:

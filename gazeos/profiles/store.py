@@ -79,7 +79,8 @@ class Profile:
 
     def save_settings(self, settings: Settings) -> None:
         self.path.mkdir(parents=True, exist_ok=True)
-        self.settings_file.write_text(settings.model_dump_json(indent=2), encoding="utf-8")
+        # Only what differs from the defaults, so improved defaults reach existing profiles.
+        self.settings_file.write_text(settings.model_dump_json(indent=2, exclude_defaults=True), encoding="utf-8")
 
     def has_calibration(self) -> bool:
         return self.calibration_file.exists()

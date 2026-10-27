@@ -49,6 +49,22 @@ def test_settings_validation() -> None:
     assert Settings.model_validate_json(s.model_dump_json()) == s
 
 
+def test_profiles_store_only_changed_settings(tmp_path) -> None:
+    """Saved profiles keep only what the user changed, so improved defaults reach them;
+    files written on 27 Oct 2026 (full dump with the old fixed lid threshold) still load."""
+    p = ProfileStore(tmp_path).get_or_create("u")
+    s = Settings()
+    s.blink.long_blink_min_ms = 500.0
+    p.save_settings(s)
+    assert json.loads(p.settings_file.read_text()) == {"blink": {"long_blink_min_ms": 500.0}}
+    assert p.load_settings() == s
+    old = json.loads(Settings().model_dump_json())
+    old["quality"].update(gaze_lid_threshold=0.3, gaze_lid_hold_frames=1)
+    old["fixation"]["saccade_velocity_deg_s"] = 30.0
+    p.settings_file.write_text(json.dumps(old))
+    assert p.load_settings().quality.lid_hidden_level == 0.45
+
+
 def test_experiment_log_redacts_passwords(tmp_path) -> None:
     log = ExperimentLogger(tmp_path, "s1")
     log.log_text("hunter2", in_password_field=True)
