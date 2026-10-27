@@ -214,12 +214,14 @@ class CalibrationWindow(QWidget):
     def paintEvent(self, event: object) -> None:  # noqa: N802
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.fillRect(self.rect(), color(self.theme_name, "bg"))
+        light = self.phase in ("intro", "calibrate", "validate")  # light surface lights the face
+        bg_key = "calib_bg" if light else "bg"
+        p.fillRect(self.rect(), color(self.theme_name, bg_key))
         ratio = device_ratio(self)
         font = QFont()
         font.setPointSize(20)
         p.setFont(font)
-        p.setPen(color(self.theme_name, "fg"))
+        p.setPen(color(self.theme_name, "calib_fg" if light else "fg"))
         top = QRectF(0, 40, self.width(), 120)
         if self.phase == "intro":
             msg = ("Look at the centre dot." if self.quick else
@@ -234,12 +236,12 @@ class CalibrationWindow(QWidget):
                 radius = target_radius(since, self.s.target_duration_s)
                 c = QPointF(x / ratio, y / ratio)
                 p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(QBrush(color(self.theme_name, "accent" if self.phase == "calibrate" else "ok")))
+                p.setBrush(QBrush(color(self.theme_name, "calib_dot" if self.phase == "calibrate" else "calib_check")))
                 p.drawEllipse(c, radius, radius)
-                p.setBrush(QBrush(color(self.theme_name, "bg")))
+                p.setBrush(QBrush(color(self.theme_name, bg_key)))
                 p.drawEllipse(c, 3, 3)
             label = "Calibrating" if self.phase == "calibrate" else "Checking accuracy"
-            p.setPen(color(self.theme_name, "muted"))
+            p.setPen(color(self.theme_name, "calib_fg"))
             p.drawText(QRectF(0, self.height() - 60, self.width(), 40), Qt.AlignmentFlag.AlignCenter,
                        f"{label} · {self.index + 1} / {len(pts)}")
         elif self.phase == "result" and self.result is not None:

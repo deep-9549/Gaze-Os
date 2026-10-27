@@ -19,11 +19,15 @@ THEMES: dict[str, dict[str, str]] = {
         "bg": "#1E1F24", "panel": "#2A2C33", "fg": "#F2F3F5", "muted": "#B8BCC6",
         "accent": "#4DA3FF", "accent_fg": "#0B1220", "ok": "#3FCF8E", "warn": "#FFC24D",
         "bad": "#FF6B6B", "ring": "#4DA3FF", "cursor": "#4DA3FF",
+        # Calibration runs on a light surface: in a dim room a dark screen leaves the face
+        # unlit, and the eye crops get dark and noisy (ADR 0006, 27 Oct 2026 recordings).
+        "calib_bg": "#C9CBD1", "calib_fg": "#1E1F24", "calib_dot": "#0B4F9C", "calib_check": "#0E6B43",
     },
     "high_contrast": {
         "bg": "#000000", "panel": "#000000", "fg": "#FFFFFF", "muted": "#FFFFFF",
         "accent": "#FFFF00", "accent_fg": "#000000", "ok": "#00FF00", "warn": "#FFFF00",
         "bad": "#FF4040", "ring": "#FFFF00", "cursor": "#00FFFF",
+        "calib_bg": "#FFFFFF", "calib_fg": "#000000", "calib_dot": "#000000", "calib_check": "#0000C0",
     },
 }
 THEMES["large_text"] = THEMES["default"]

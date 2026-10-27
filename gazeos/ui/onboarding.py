@@ -195,5 +195,5 @@ def _position_hint(status: str, landmarks: NDArray[np.float64] | None, width: in
     cx = (landmarks[:, 0].min() + landmarks[:, 0].max()) / 2
     if abs(cx - width / 2) > width * 0.15:
         return "Move to the centre of the camera view."
-    return "Good position. Press Next (look at it until the ring fills)."
+    return "Good position. Press Next: click it, or look at it until the ring fills."
 
