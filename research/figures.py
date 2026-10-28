@@ -101,6 +101,8 @@ def scatter_speed_accuracy(names: Sequence[str], ms: Sequence[float], err: Seque
         ax.scatter([x], [y], s=60, color=SERIES[i % 3], edgecolor=SURFACE, linewidth=2, label=n, zorder=3)
         ax.annotate(n, (x, y), xytext=(6, 4), textcoords="offset points", color=INK_2, fontsize=8)
     ax.axvline(8.0, color=INK_2, linewidth=1, linestyle=(0, (4, 3)))
+    ax.annotate("budget: 8 ms (PRD)", (8.0, 1.0), xycoords=("data", "axes fraction"), xytext=(-4, -2),
+                textcoords="offset points", ha="right", va="top", color=INK_2, fontsize=8)
     style(ax, "Speed vs accuracy (E8)", "Milliseconds per frame (CPU)", "Angular error (degrees)")
     ax.legend(frameon=False, fontsize=8, labelcolor=INK_2)
     return _save(fig, out)
