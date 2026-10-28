@@ -135,7 +135,7 @@ def _save(fig: plt.Figure, out: str | Path) -> Path:
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(out, facecolor=SURFACE)
+    fig.savefig(out, facecolor=SURFACE, bbox_inches="tight", pad_inches=0.1)  # left titles can overrun the axes
     plt.close(fig)
     return out
 
