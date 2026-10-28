@@ -97,7 +97,7 @@ class Predictor:
         current_word: str,
         gaze_points: Sequence[tuple[float, float]] = (),
     ) -> Suggestions:
-        context = tokenize(text_before)[-2:]
+        context = tokenize(text_before)[-16:]  # the 3-gram uses the last 2, the transformer up to 16
         prefix = current_word.lower()
         scores: dict[str, float] = {}
         sources: dict[str, str] = {}
