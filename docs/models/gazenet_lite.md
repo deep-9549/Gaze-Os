@@ -20,10 +20,10 @@ non-commercial research data and stays local (`models/` is git-ignored for it).
 | --- | --- | --- |
 | Mean angular error, held-out subjects (mean of subjects) | 3.66° (p06 2.67°, p13 4.64°); teacher M3 3.65° | MPIIFaceGaze p06 + p13, all 4,375 images, through the app's ONNX runtime wrapper |
 | Mean angular error, leave-one-subject-out (the benchmark, E1) | M3: 4.78° ± 0.09° over 3 seeds (seed means 4.83, 4.84, 4.68°; SD over subjects about 1.3°); 3-seed ensemble 4.65° | MPIIFaceGaze, 15 folds |
-| After 9-point calibration | not measured yet (needs GazeOS-Webcam) | |
+| After calibration, real webcam | 1.08° leave-one-dot-out (polynomial, 9 dots); raw spread 1.59° (M3: 0.79° and 1.23°) | one user, guided 9-dot recording of 27 Oct 2026 (ADR 0008) |
 | Parity vs PyTorch | M3 3.9e-6° mean (limit 0.05°) | 1,000 images of p06 |
 | CPU latency, model only | 2.02 ms/frame (ONNX Runtime, fp32) | laptop CPU, 1,000 images; full pipeline profile pending |
-| Uncertainty: Spearman ρ between predicted σ and error; median σ | ρ +0.21 (was +0.19); median σ 2.7° (was 1.5°, against a 3.3° actual error) | MPIIFaceGaze p06 + p13; `var_head` refitted after training (`training.fit_uncertainty`, 27 Oct 2026), angles bit-identical |
+| Uncertainty: Spearman ρ between predicted σ and error; median σ | ρ +0.21 (was +0.19); median σ 2.7° (was 1.5°, against a 3.3° actual error) | MPIIFaceGaze p06 + p13; `var_head` refitted after training (`training.fit_uncertainty`, 27 Oct 2026), angles bit-identical. Across the 45 leave-one-subject-out M3 models the refitted head reaches only ρ 0.08 ± 0.19 (E12, see the [M3 card](gazenet_m3.md)) |
 
 ## Limitations and fairness
 
