@@ -58,12 +58,12 @@ be done without a person, data access, GPUs or approvals (see HANDOFF.md).
 | --- | --- |
 | M0 geometric baseline | Done (runs in the app today) |
 | M1 L2CS-Net baseline | Converter done (`training/convert_l2cs.py`); **needs you** to download the weights |
-| M2 / M3 GazeNet-GOS, M4 Lite | Architecture, losses, training, export, INT8 done and smoke-tested; **needs you** for datasets + GPU training |
-| Distillation (Stage C), meta-learning P5 (Stage D) | Code done and tested on synthetic data; needs trained models |
+| M2 / M3 GazeNet-GOS, M4 Lite | Trained (Phases 4-6): M3 4.78° ± 0.09° leave-one-subject-out over 3 seeds; M3 is the app's model on this laptop, M4 on slower CPUs; installed locally, never committed ([model cards](models/gazenet_m3.md)) |
+| Distillation (Stage C), meta-learning P5 (Stage D) | Stage C done (M4 from M3, 3.66° vs 3.65° on p06 + p13); Stage D dropped for the solo scope |
 | Personalization P0-P4 | Done and tested; P5 runtime done |
 | Gesture models B0 / B1 / B2 | B0 runs today; B1/B2 training and export done; **needs you** for the gesture dataset |
-| Language models L0 / L1 / L2 / L3 | L0 + L1 run today (bundled word list and seed corpus); L2 training done; L3 local LLM client done (opt-in) |
-| Experiments E1-E12 | Runners for E6 and E7 work today on simulated users; training scripts cover E1-E5, E8, E12; the rest need data |
+| Language models L0 / L1 / L2 / L3 | L1 3-gram trained on 1.5 M sentences and used by the app; L2 transformer trained, off by default (+0.9 points in E11); L3 local LLM client done (opt-in) ([model card](models/language_models.md)) |
+| Experiments E1-E12 | Done: E1 (benchmark), E2 (input streams), E3 (loss), E5 (pre-training, Phase 4), E7 (filters, one user's recording), E11 (keystroke savings), E12 (uncertainty, negative). One data point: E4 (camera intrinsics), E6 (calibration methods), E8 (speed, final timing queued). **Needs you**: E9 (participants), E10 (gesture recording). Results in the [plan's log](PLAN.md) |
 | User study tools | Fitts task, questionnaires, statistics, figures done; **needs you** for ethics approval and participants |
 
 ## Engineering (PRD 18, 22, 23)
@@ -72,6 +72,6 @@ be done without a person, data access, GPUs or approvals (see HANDOFF.md).
 | --- | --- |
 | Repository layout, typed settings schema, ADRs | Done |
 | Ruff, strict mypy on the app | Done (clean) |
-| Unit, property, replay, backend, UI, model tests | Done (113 tests; app coverage 79%) |
+| Unit, property, replay, backend, UI, model tests | Done (141 tests) |
 | CI (Linux + Windows), training smoke run, tagged Windows build | Done; runs once the repo has GitHub Actions enabled |
 | Latency budget on the reference laptop, 2-hour soak | Profiler done; **needs you** to run it on the reference machine |
