@@ -146,3 +146,25 @@ def test_ablation_table_compares_each_arm_with_e1_on_the_same_folds(tmp_path) ->
     assert r["e1_seed0"]["seed_spread_deg"] == pytest.approx(0.4)
     arm = r["arms"]["e2/eyes_only"]
     assert arm["folds_done"] == 1 and arm["delta_vs_e1"] == pytest.approx(0.5)
+
+
+def test_seed_table_pairs_each_run_with_e1_on_the_same_seed_and_subject(tmp_path) -> None:
+    import json
+
+    from research.ablation_table import seed_table
+
+    def run(d, err):
+        d.mkdir(parents=True)
+        (d / "result.json").write_text(json.dumps({"test": {"mean_error_deg": err}}))
+
+    e1 = tmp_path / "e1"
+    for f, err in enumerate([3.0, 4.0, 5.0]):
+        for s in (0, 1, 2):
+            run(e1 / f"fold{f}" if s == 0 else e1 / f"seed{s}" / f"fold{f}", err + 0.1 * s)
+            arm_err = err + 0.1 * s - 0.3 - 0.01 * f  # 0.3-0.32 deg better than E1 in every run
+            run(tmp_path / "e2" / "no_head" / f"fold{f}" if s == 0 else
+                tmp_path / "e2_seeds" / "no_head" / f"seed{s}" / f"fold{f}", arm_err)
+    r = seed_table(tmp_path / "e2", tmp_path / "e2_seeds", e1)["no_head"]
+    assert r["runs"] == 9 and r["better_in"] == 9
+    assert r["delta"] == pytest.approx(-0.31)
+    assert r["p"] < 0.001 and r["p_holm"] == pytest.approx(r["p"])
