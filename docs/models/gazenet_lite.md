@@ -12,7 +12,7 @@ non-commercial research data and stays local (`models/` is git-ignored for it).
 | Config | Stage A `experiment=stage_a_rtgene_eth`; Stage B `experiment=stage_b_mpii data.fold=null`; Stage C `training.distill` (T = 4, 20 epochs, best epoch 15); `data.workers=4`, seed 0 |
 | Training data | MPIIFaceGaze subjects p00-p05, p07-p12, p14 (13); validation p06, p13. Stage A: RT-GENE s000-s002, s004-s006, s008-s013 (validation s007; s003 excluded for degraded images; s014-s016 held out). Shard manifests with SHA-256 checksums next to the shards |
 | Input / output | GazeOS ONNX contract: normalized 224x224 RGB face, two 36x60 eye crops (left mirrored), head pose; pitch/yaw bin logits, log-variance, 256-d features, attention |
-| Size / precision | 10.0 MB, fp32 (installed 27 Oct 2026 with the refitted uncertainty head; the previous file is kept as `models/gazenet_lite_prev.onnx`). Static INT8 was rejected: it lost 1.2° and ran slower (2.69 vs 2.02 ms/frame) |
+| Size / precision | 10.0 MB, fp32 (installed 27 Oct 2026 with the refitted uncertainty head; the previous file is kept as `models/gazenet_lite_prev.onnx`). Static INT8 was rejected: it lost 1.3° (4.97 vs 3.66°) and ran slower (3.04 vs 2.45 ms per frame, E8) |
 
 ## Metrics
 
@@ -22,7 +22,7 @@ non-commercial research data and stays local (`models/` is git-ignored for it).
 | Mean angular error, leave-one-subject-out (the benchmark, E1) | M3: 4.78° ± 0.09° over 3 seeds (seed means 4.83, 4.84, 4.68°; SD over subjects about 1.3°); 3-seed ensemble 4.65° | MPIIFaceGaze, 15 folds |
 | After calibration, real webcam | 1.08° leave-one-dot-out (polynomial, 9 dots); raw spread 1.59° (M3: 0.79° and 1.23°) | one user, guided 9-dot recording of 27 Oct 2026 (ADR 0008) |
 | Parity vs PyTorch | M3 3.9e-6° mean (limit 0.05°) | 1,000 images of p06 |
-| CPU latency, model only | 2.02 ms/frame (ONNX Runtime, fp32) | laptop CPU, 1,000 images; full pipeline profile pending |
+| CPU latency | model 2.45 ms per frame, 4.7 times faster than M3 (11.6 ms) at the same error; in the app 3.5 ms, whole frame 16.6 ms | development laptop. Model alone: E8 on an idle machine, 28 Oct (`research.e8_speed`: the app's ONNX wrapper, 4 threads, best of 3 rounds of the median of 50). In the app: ADR 0008. PRD budget 8 ms |
 | Uncertainty: Spearman ρ between predicted σ and error; median σ | ρ +0.21 (was +0.19); median σ 2.7° (was 1.5°, against a 3.3° actual error) | MPIIFaceGaze p06 + p13; `var_head` refitted after training (`training.fit_uncertainty`, 27 Oct 2026), angles bit-identical. Across the 45 leave-one-subject-out M3 models the refitted head reaches only ρ 0.08 ± 0.19 (E12, see the [M3 card](gazenet_m3.md)) |
 
 ## Limitations and fairness

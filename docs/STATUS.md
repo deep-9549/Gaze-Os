@@ -63,7 +63,7 @@ be done without a person, data access, GPUs or approvals (see HANDOFF.md).
 | Personalization P0-P4 | Done and tested; P5 runtime done |
 | Gesture models B0 / B1 / B2 | B0 runs today; B1/B2 training and export done; **needs you** for the gesture dataset |
 | Language models L0 / L1 / L2 / L3 | L1 3-gram trained on 1.5 M sentences and used by the app; L2 transformer trained, off by default (+0.9 points in E11); L3 local LLM client done (opt-in) ([model card](models/language_models.md)) |
-| Experiments E1-E12 | Done: E1 (benchmark), E2 (input streams), E3 (loss), E5 (pre-training, Phase 4), E7 (filters, one user's recording), E11 (keystroke savings), E12 (uncertainty, negative). One data point: E4 (camera intrinsics), E6 (calibration methods), E8 (speed, final timing queued). **Needs you**: E9 (participants), E10 (gesture recording). Results in the [plan's log](PLAN.md) |
+| Experiments E1-E12 | Done: E1 (benchmark), E2 (input streams; no head pose and face only over 3 seeds), E3 (loss), E5 (pre-training, Phase 4), E7 (filters, one user's recording), E8 (speed vs accuracy), E11 (keystroke savings), E12 (uncertainty, negative). One data point: E4 (camera intrinsics), E6 (calibration methods). **Needs you**: E9 (participants), E10 (gesture recording). Results in the [plan's log](PLAN.md) |
 | User study tools | Fitts task, questionnaires, statistics, figures done; **needs you** for ethics approval and participants |
 
 ## Engineering (PRD 18, 22, 23)

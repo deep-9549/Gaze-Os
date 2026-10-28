@@ -24,7 +24,7 @@ on non-commercial research data and stays local (`models/` is git-ignored for it
 | After calibration, real webcam | 0.76-0.79° leave-one-dot-out (polynomial, 9 dots); raw spread 1.23° | one user, guided 9-dot recording of 27 Oct 2026 (ADR 0008) |
 | Jitter on a still gaze (E7) | 1.12° unfiltered; 0.13° with the One Euro filter the app uses | same recording, `research.e7_filters` |
 | Sensitivity to invisible input changes | 0.16-0.32° (sensor noise SD 2/255, JPEG re-encoding, a 1 px shift) | same recording, `research.webcam_stability` |
-| CPU latency | network 13.4 ms per frame, whole frame 26 ms (p95 30 ms) | development laptop (ADR 0008); idle E8 timing pending |
+| CPU latency | network 11.6 ms per frame (E8, idle machine); in the app 13.4 ms, whole frame 26 ms (p95 30 ms) | development laptop; E8 method in the [M4 card](gazenet_lite.md), app numbers from ADR 0008 |
 | Uncertainty: Spearman ρ between predicted σ and error | 0.11 on p06 + p13 after the refit (0.15 before). Over the 45 E1 models: 0.08 ± 0.19, pooled 0.00, flat reliability diagram (E12) | the head does not rank errors on new people |
 
 ## Tried and not adopted
