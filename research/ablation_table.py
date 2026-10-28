@@ -51,6 +51,7 @@ def table(experiments: list[Path], e1: Path = E1) -> dict[str, Any]:
 def seed_table(seed0: Path, extra: Path, e1: Path = E1) -> dict[str, Any]:
     """Arms re-run with seeds 1-2 (`extra/<arm>/seed<s>/fold<f>`; seed 0 in `seed0/<arm>/fold<f>`)
     against E1 run by run: same seed, same test subject. Paired t-test, Holm over the arms."""
+    from scipy.stats import t as student_t
     from scipy.stats import ttest_rel
 
     from research.stats import holm
@@ -70,6 +71,8 @@ def seed_table(seed0: Path, extra: Path, e1: Path = E1) -> dict[str, Any]:
         d = a_err - r_err
         out[arm.name] = {"runs": len(pairs), "mean": float(a_err.mean()), "e1_mean": float(r_err.mean()),
                          "delta": float(d.mean()), "delta_sd": float(d.std(ddof=1)) if len(d) > 1 else None,
+                         "delta_ci95": float(student_t.ppf(0.975, len(d) - 1) * d.std(ddof=1) / np.sqrt(len(d)))
+                         if len(d) > 1 else None,
                          "better_in": int((d < 0).sum()),
                          "p": float(ttest_rel(a_err, r_err).pvalue) if len(d) > 2 else None,
                          "seed_means": {s: float(np.mean([p[1] for p in pairs if p[0] == s]))

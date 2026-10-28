@@ -124,7 +124,17 @@ def test_figures_render(tmp_path) -> None:
     figures.reliability_diagram([1, 2, 3], [1.1, 2.2, 2.9], tmp_path / "c.png")
     figures.grouped_breakdown({"Lighting": {"bright": 1.8, "dim": 2.4}}, tmp_path / "d.png")
     figures.scatter_speed_accuracy(["M3", "M4"], [20.0, 6.0], [1.7, 1.9], tmp_path / "e.png")
-    assert len(list(tmp_path.glob("*.png"))) == 5
+    figures.filter_tradeoff({"none": {"rms_jitter_deg": 1.1, "lag_ms": 470, "selection_rate": 0.2},
+                             "one_euro": {"rms_jitter_deg": 0.13, "lag_ms": 570, "selection_rate": 1.0}},
+                            tmp_path / "f.png")
+    figures.keystroke_savings({"L0 word list": {"keystroke_savings": 0.43}}, tmp_path / "g.png")
+    table = {"arms": {"e2/no_head": {"delta_vs_e1": -0.4, "folds_done": 3},
+                      "e3/beta2": {"delta_vs_e1": 0.02, "folds_done": 3}},
+             "seeds": {"no_head": {"runs": 9, "delta": -0.3, "delta_ci95": 0.2}}}
+    rows = figures.ablation_rows(table)
+    assert rows[0] == ("Inputs: no head pose (9 runs)", -0.3, 0.2)  # the 3-seed result replaces seed 0's
+    figures.ablation_deltas(rows, 0.35, tmp_path / "h.png")
+    assert len(list(tmp_path.glob("*.png"))) == 8
 
 
 def test_ablation_table_compares_each_arm_with_e1_on_the_same_folds(tmp_path) -> None:
