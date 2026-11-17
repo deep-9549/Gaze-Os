@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from gazeos.calibration.geometry import ScreenGeometry
 from gazeos.calibration.implicit import ImplicitRecalibrator
 from gazeos.calibration.personalization import Personalizer, load_personalizer, make_personalizer
+from gazeos.calibration.posture import PostureGuard
 from gazeos.calibration.protocol import CalibrationSample
 from gazeos.capture.camera import CaptureThread, OpenCVSource
 from gazeos.control.engine import Action, ControlEngine, EngineOutput
@@ -127,6 +128,12 @@ class GazeOSApp(QObject):
         self.sync = TargetSync(self.registry, self.bridge)
         self.samples: list[CalibrationSample] = []
         self.personalizer = self._load_personalizer()
+        # Says when the user has moved away from where the calibration was made.
+        self.posture = PostureGuard()
+        if self.profile.has_calibration():
+            origins = self.profile.load_calibration_features().get("origin")
+            if origins is not None and len(origins):
+                self.posture.set_reference(origins)
         self.recalibrator = ImplicitRecalibrator(
             self.personalizer, self.samples, self.settings.calibration.implicit_refit_every,
             self.settings.calibration.implicit_decay_min, on_refit=self._on_refit,
@@ -281,6 +288,10 @@ class GazeOSApp(QObject):
     @Slot(object)
     def _on_frame(self, packet: tuple[ProcessedFrame, EngineOutput | None, np.ndarray]) -> None:
         pf, out, image = packet
+        if out is not None and pf.pose is not None and self.calibration is None and not out.paused:
+            msg = self.posture.update(pf.result.t_capture, pf.pose.gaze_origin)
+            if msg:
+                self.overlay.show_toast(msg, 8)
         if out is not None:
             self.overlay.set_output(out)
             self.action_bar.set_action(out.action)
@@ -518,6 +529,7 @@ class GazeOSApp(QObject):
         self.recalibrator.base_samples = list(outcome.samples)
         self.recalibrator.baseline_error_px = outcome.validation.mean_px
         self.personalizer.save(self.profile.calibration_file)
+        self.posture.set_reference(np.stack([s.obs.origin for s in outcome.samples]))
         self.profile.save_calibration_features(
             pitchyaw=np.stack([s.obs.pitchyaw for s in outcome.samples]),
             origin=np.stack([s.obs.origin for s in outcome.samples]),
