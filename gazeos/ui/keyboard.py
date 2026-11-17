@@ -78,9 +78,16 @@ class KeyboardWindow(QWidget):
         ratio = device_ratio(self)
         self.error_radius_px = error_radius_px
         screen = QGuiApplication.primaryScreen()
-        avail_w = screen.availableGeometry().width() if screen else 1280
-        unit = key_unit_px(error_radius_px / ratio)
-        unit = min(unit, (avail_w - 40) / layout.width)  # fit on screen; large6 for low accuracy
+        avail = screen.availableGeometry() if screen else None
+        avail_w = avail.width() if avail else 1280
+        avail_h = avail.height() if avail else 720
+        # As large as the screen allows, whatever the calibration score: the score is measured
+        # with the head still, right after calibrating, and typing error was 2-3 times larger
+        # (18 Nov 2026). Sized from the score, a good calibration (0.5 cm) gave 12 mm keys whose
+        # labels no longer fit. Up to 85% of the screen height, less the prediction strip.
+        unit = min((avail_w - 40) / layout.width, (0.85 * avail_h - 130) / layout.height)
+        unit = max(unit, key_unit_px(error_radius_px / ratio))  # never smaller than 2.5x the error
+        unit = min(unit, (avail_w - 40) / layout.width)  # but always on screen
         self.unit = unit
         self.keys_host.setFixedSize(int(layout.width * unit), int(layout.height * unit))
         for key in layout.keys:
