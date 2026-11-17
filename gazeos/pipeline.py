@@ -272,6 +272,7 @@ class ProcessingThread(threading.Thread):
             cal = (float(c[0]), float(c[1]))
         cur = out.cursor if out is not None and out.cursor is not None else (float("nan"), float("nan"))
         key = eng._dwell_target.key if eng is not None and eng._dwell_target is not None else ""
+        key = key.replace(",", "%2C")  # the comma key is named key_, and would split the CSV row
         assert self._trace is not None
         self._trace.write(f"{r.t_capture:.4f},{r.status},{int(r.quality_ok)},{int(getattr(r, 'lid_down', False))},"
                           f"{getattr(r, 'blink_score', 0.0):.3f},{raw[0]:.1f},{raw[1]:.1f},{cal[0]:.1f},{cal[1]:.1f},"
