@@ -21,7 +21,9 @@ FloatArray = NDArray[np.float64]
 
 
 class PostureGuard:
-    def __init__(self, limit_mm: float = 90.0, hold_s: float = 3.0, repeat_s: float = 60.0) -> None:
+    # 140 app-mm is about 10 cm in reality (the app overstates distance by about 44% with the default
+    # focal length). Moving 13 cm cost 4-5 mm on 18 Nov; a smaller lean is not worth interrupting.
+    def __init__(self, limit_mm: float = 140.0, hold_s: float = 3.0, repeat_s: float = 60.0) -> None:
         self.limit_mm = limit_mm
         self.hold_s = hold_s
         self.repeat_s = repeat_s
