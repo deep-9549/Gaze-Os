@@ -1,9 +1,19 @@
 from __future__ import annotations
 
+import itertools
+import string
+
 import pytest
 
 from gazeos.text_entry.decoder import NoisyChannelDecoder
-from gazeos.text_entry.layouts import get_layout, key_unit_px
+from gazeos.text_entry.layouts import (
+    LAYOUTS,
+    SYMBOL_PAGES,
+    Layout,
+    get_layout,
+    key_unit_px,
+    symbols_layout,
+)
 from gazeos.text_entry.ngram import KneserNeyTrigram, sentences, tokenize
 from gazeos.text_entry.phrases import PhraseBank
 from gazeos.text_entry.predictor import Predictor
@@ -140,3 +150,70 @@ def test_default_predictor_loads_a_trained_trigram_when_present(tmp_path) -> Non
     assert "tomorrow" in trained.suggest("see you ", "").words
     seed = Predictor.default(get_layout("qwerty"), ngram_path=tmp_path / "missing.json")
     assert seed.ngram is not None  # falls back to the seed corpus
+
+
+def _every_layout() -> list[Layout]:
+    pages = [symbols_layout(get_layout(name), page) for name in ("qwerty", "alphabetical")
+             for page in range(len(SYMBOL_PAGES))]
+    return [get_layout(name) for name in LAYOUTS] + pages
+
+
+@pytest.mark.parametrize("lay", _every_layout(), ids=lambda lay: lay.name)
+def test_every_key_is_usable(lay: Layout) -> None:
+    """Every key is at least 0.9 of a standard key each way, lies on the keyboard and overlaps no
+    other key (the alphabetical layout's Space was 0 wide, so it could not be seen or looked at)."""
+    eps = 1e-9
+    assert len({k.id for k in lay.keys}) == len(lay.keys)
+    for k in lay.keys:
+        assert k.w >= 0.9 - eps and k.h >= 0.9 - eps, k
+        assert k.x >= -eps and k.y >= -eps and k.x + k.w <= lay.width + eps and k.y + k.h <= lay.height + eps, k
+    for a, b in itertools.combinations(lay.keys, 2):
+        apart_x = min(a.x + a.w, b.x + b.w) - max(a.x, b.x) <= eps
+        apart_y = min(a.y + a.h, b.y + b.h) - max(a.y, b.y) <= eps
+        assert apart_x or apart_y, (a.id, b.id)
+
+
+@pytest.mark.parametrize("name", ["qwerty", "alphabetical"])
+def test_symbol_pages_keep_the_keyboard_in_place(name: str) -> None:
+    """The pages of digits and symbols are the letter keyboard's size, so keys keep their size;
+    Space, Del, Enter and the rest stay where they were, "ABC" takes 123's place and the page
+    switch Shift's. Between them the pages hold every printable ASCII character."""
+    base = get_layout(name)
+    where = {k.id: (k.x, k.y, k.w, k.h) for k in base.keys}
+    chars: set[str] = set()
+    for page, switch in enumerate((("symbols", "#+="), ("numbers", "123"))):
+        lay = symbols_layout(base, page)
+        keys = {k.id: k for k in lay.keys}
+        assert (lay.width, lay.height) == (base.width, base.height)
+        for kid in ("space", "backspace", "enter", "speak", "phrases", "close"):
+            assert (keys[kid].x, keys[kid].y, keys[kid].w, keys[kid].h) == where[kid], kid
+        abc, other = keys["letters"], keys[switch[0]]
+        assert abc.label == "ABC" and (abc.x, abc.y, abc.w, abc.h) == where["numbers"]
+        assert other.label == switch[1] and (other.x, other.y, other.w, other.h) == where["shift"]
+        assert not any(k.letters for k in lay.keys)
+        top = sorted((k for k in lay.keys if k.text and k.y == 0.0), key=lambda k: k.x)
+        assert "".join(k.text for k in top) == "1234567890"
+        chars |= {k.text for k in lay.keys if k.text}
+    assert set(string.digits + string.punctuation) <= chars
+
+
+def test_symbols_are_typed_literally(predictor: Predictor) -> None:
+    """Digits and symbols go out exactly once, as labelled: never shifted, no space added after
+    '.' or ','. They end the word, use up a pending Shift and leave predictions working."""
+    typed: list[str] = []
+    lay = get_layout("qwerty")
+    sess = TypingSession(lay, predictor, emit=typed.append)
+    sym = {k.label: k for k in symbols_layout(lay).keys}
+    for ch in "hi":
+        sess.press(lay.key_for_letter(ch))  # type: ignore[arg-type]
+    sess.press(next(k for k in lay.keys if k.id == "shift"))
+    for label in "7@/.,":
+        sess.press(sym[label])
+    assert sess.text == "hi7@/.," and "".join(typed) == sess.text
+    assert not sess.shift and sess.current_word == "" and sess.suggestions.words
+    sess.press(lay.key_for_letter("a"))  # type: ignore[arg-type]
+    assert sess.text == "hi7@/.,a" and sess.current_word == "a"  # Shift did not wait past the symbols
+    sess.press(sym["Space"])
+    sess.press(sym["Del"])
+    sess.press(sym["Enter"])
+    assert sess.text == "hi7@/.,a\n"

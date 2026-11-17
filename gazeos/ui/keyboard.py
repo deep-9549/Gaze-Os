@@ -11,7 +11,7 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from gazeos.text_entry.layouts import Key, Layout, key_unit_px
+from gazeos.text_entry.layouts import Key, Layout, key_unit_px, symbols_layout
 from gazeos.text_entry.phrases import PhraseBank
 from gazeos.text_entry.session import TypingSession
 from gazeos.text_entry.tts import Speaker
@@ -39,6 +39,7 @@ class KeyboardWindow(QWidget):
         self.setStyleSheet(stylesheet(theme_name))
         self.unit = 0.0
         self.error_radius_px = error_radius_px
+        self.current_layout = session.layout  # what the keys show: the letters or a page of symbols
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -73,8 +74,10 @@ class KeyboardWindow(QWidget):
     # -- layout ----------------------------------------------------------------
     def build(self, layout: Layout, error_radius_px: float) -> None:
         for b in self.key_buttons.values():
+            b.hide()  # hidden buttons are not gaze targets; deleted once the click that called this returns
             b.deleteLater()
         self.key_buttons.clear()
+        self.current_layout = layout
         ratio = device_ratio(self)
         self.error_radius_px = error_radius_px
         screen = QGuiApplication.primaryScreen()
@@ -91,7 +94,7 @@ class KeyboardWindow(QWidget):
         self.unit = unit
         self.keys_host.setFixedSize(int(layout.width * unit), int(layout.height * unit))
         for key in layout.keys:
-            b = QPushButton(key.label, self.keys_host)
+            b = QPushButton(key.label.replace("&", "&&"), self.keys_host)  # a lone & marks a shortcut
             b.setObjectName(f"key_{key.id}")
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             b.setGeometry(int(key.x * unit) + 2, int(key.y * unit) + 2, int(key.w * unit) - 4, int(key.h * unit) - 4)
@@ -133,7 +136,12 @@ class KeyboardWindow(QWidget):
         if key.id == "close":
             self.on_close()
             return
-        if key.id == "numbers":
+        if key.id in ("numbers", "symbols"):  # "123" and "#+=": the pages of digits and symbols
+            page = 1 if key.id == "symbols" else 0
+            self.build(symbols_layout(self.session.layout, page), self.error_radius_px)
+            return
+        if key.id == "letters":  # "ABC": back to the letters the user came from
+            self.build(self.session.layout, self.error_radius_px)
             return
         point = self._gaze_in_key_units() if key.letters else None
         self.session.press(key, point)
