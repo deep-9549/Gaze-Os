@@ -323,6 +323,8 @@ class GazeOSApp(QObject):
             self.overlay.show_toast("Face lost: tracking paused", 3)
         elif e == "auto_resume":
             self.overlay.show_toast("Face found: tracking resumed", 2)
+        elif e == "pause_toggle":
+            self._pause_toast()
         elif e == "zoom_open":
             self.overlay.show_toast("Zoom: look at your target again", 2)
         if self.recalibrator.drift_suspected():
@@ -337,6 +339,15 @@ class GazeOSApp(QObject):
     def toggle_pause(self) -> None:
         with self.worker.with_engine():
             self.engine.toggle_pause("user")
+        self._pause_toast()
+
+    def _pause_toast(self) -> None:
+        """Say how to get back: while paused nothing responds except Pause itself."""
+        if self.engine.paused:
+            self.overlay.show_toast("Paused. To resume, look at Pause on the right-hand bar, "
+                                    "or at the top-left corner of the screen.", 6)
+        else:
+            self.overlay.show_toast("Resumed.", 2)
 
     def emergency_stop(self) -> None:
         with self.worker.with_engine():
