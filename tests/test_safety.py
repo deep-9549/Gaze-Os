@@ -318,3 +318,54 @@ def test_keep_looking_at_a_typing_key_to_type_it_again(settings, geometry) -> No
         t += 1 / 30
         eng.update(EngineInput(t, _obs((1830.0, 830.0)), OK))
     assert pressed == ["l", "l", "pause"]
+
+
+def test_hands_free_typing_through_the_whole_app(qtbot, tmp_path) -> None:
+    """Gaze on the real keyboard's registered keys types text: H, I; held L twice; 123, 7, ABC;
+    and a paused app resumes only through Pause. The whole chain: TargetSync registration,
+    engine dwell and repeat, the main-thread bridge, the keyboard and the typing session."""
+    pytest.importorskip("PySide6")
+    from types import SimpleNamespace
+
+    from gazeos.ui.app import GazeOSApp
+
+    app = GazeOSApp(SimpleNamespace(home=str(tmp_path), profile="t", simulate=True, dry_run=True,
+                                    gaze_model=None, camera=None))
+    try:
+        app.worker.stop()  # the test drives the engine itself
+        app.worker.join(2.0)
+        app.toggle_keyboard()
+        qtbot.waitUntil(lambda: app.keyboard is not None and app.keyboard.isVisible(), timeout=30000)
+        clock = [0.0]
+
+        def look(prefix: str, seconds: float) -> None:
+            app.sync.sync()
+            target = next(t for t in app.registry.all() if t.key.startswith(prefix))
+            cx, cy = target.rect.center
+            for _ in range(int(round(seconds * 30))):
+                clock[0] += 1 / 30
+                app.engine.update(EngineInput(clock[0], _obs((cx, cy)), OK))
+            qtbot.wait(50)  # let the queued button presses run on the GUI thread
+
+        look("keyboard:key_h:", 1.0)
+        look("keyboard:key_i:", 1.0)
+        look("keyboard:key_l:", 2.4)  # held: typed twice
+        assert app.keyboard is not None
+        assert app.keyboard.session.text == "hill"
+        look("keyboard:key_numbers:", 1.0)
+        qtbot.wait(100)
+        look("keyboard:key_sym_digit_seven:", 1.0)
+        look("keyboard:key_letters:", 1.0)
+        qtbot.wait(100)
+        assert app.keyboard.session.text == "hill7"
+        assert any(t.key.startswith("keyboard:key_a:") for t in (app.sync.sync() or app.registry.all()))
+        app.engine.set_paused(True)
+        look("keyboard:key_a:", 1.5)  # paused: keys do nothing
+        assert app.keyboard.session.text == "hill7" and app.engine.paused
+        look("action_bar:pause:", 1.2)  # Pause resumes
+        assert not app.engine.paused
+    finally:
+        if app.keyboard is not None:
+            app.keyboard.close()
+        for w in (app.overlay, app.action_bar, app.menu, app.shortcuts, app.debug):
+            w.close()
