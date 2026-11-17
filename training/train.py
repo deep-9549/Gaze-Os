@@ -101,7 +101,8 @@ def split_subjects(all_subjects: list[int], cfg: Any) -> tuple[list[int], list[i
         test = [subjects[cfg.data.fold % len(subjects)]]
     rest = [s for s in subjects if s not in test]
     rng = random.Random(cfg.seed)
-    n_val = max(1, int(round(len(rest) * cfg.data.val_fraction))) if len(rest) > 1 else 0
+    # val_fraction 0: no validation subjects; the run keeps its last epoch (fixed schedule).
+    n_val = max(1, int(round(len(rest) * cfg.data.val_fraction))) if len(rest) > 1 and cfg.data.val_fraction > 0 else 0
     val = sorted(rng.sample(rest, n_val)) if n_val else []
     train = [s for s in rest if s not in val]
     return train, val, test
@@ -236,8 +237,11 @@ def train(cfg: Any) -> dict[str, Any]:
             writer.add_scalar("train/loss", metrics["train_loss"], epoch)
             if "val" in metrics:
                 writer.add_scalar("val/mean_error_deg", score, epoch)
-        stop = score >= best and epoch - best_epoch >= t.patience  # early stopping on validation error
-        if score < best:
+        # Early stopping on validation error. Without validation subjects nothing is selected:
+        # every epoch replaces best.pt, so the fixed schedule's last epoch is the model.
+        fixed = val_dl is None
+        stop = not fixed and score >= best and epoch - best_epoch >= t.patience
+        if fixed or score < best:
             best, best_epoch = score, epoch
             torch.save({"model": model.state_dict(), "config": _plain(cfg), "epoch": epoch, "commit": git_commit()},
                        out_dir / "best.pt")

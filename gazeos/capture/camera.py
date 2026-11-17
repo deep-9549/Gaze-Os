@@ -130,14 +130,14 @@ class CaptureThread(threading.Thread):
         self.reconnect_delay_s = reconnect_delay_s
         self._slot: Frame | None = None
         self._cond = threading.Condition()
-        self._stop = threading.Event()
+        self._stop_evt = threading.Event()  # not `_stop`: Thread.join() calls a method of that name
         self._index = 0
         self.dropped = 0
         self.connected = True
 
     def run(self) -> None:
         failures = 0
-        while not self._stop.is_set():
+        while not self._stop_evt.is_set():
             image = self.source.read()
             if image is None:
                 failures += 1
@@ -170,7 +170,7 @@ class CaptureThread(threading.Thread):
             return frame
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_evt.set()
         with self._cond:
             self._cond.notify_all()
         self.source.release()

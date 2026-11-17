@@ -3,8 +3,10 @@
 Runs P0-P4 (plus P5 when a meta-learned init is given) with 1, 3, 5, 9 and 16
 calibration points and reports angular error on held-out targets.
 
-    # On GazeOS-Webcam recordings (session 1-2 calibrate, session 3 test):
-    python -m research.e6_personalization --recordings "data/recordings/P*/session*.npz" --out results/e6.json
+    # On GazeOS-Webcam recordings (session 1-2 calibrate, session 3 test), through a gaze network:
+    python -m research.e6_personalization --recordings "data/recordings/P*/session*.npz" \
+        --gaze-model models/gazenet_m3.onnx --out results/e6.json
+    # The same without --gaze-model replays the geometric baseline M0 (and says so in the result).
     # On simulated users (no data needed; checks the method end to end):
     python -m research.e6_personalization --simulate 10 --out results/e6_sim.json
 """
@@ -104,6 +106,7 @@ def main() -> None:
     ap.add_argument("--simulate", type=int, default=0, help="number of simulated subjects")
     ap.add_argument("--recordings", default=None)
     ap.add_argument("--meta-init", default=None)
+    ap.add_argument("--gaze-model", default=None, help="ONNX gaze model to replay recordings through (else M0)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--figure", default=None)
     a = ap.parse_args()
@@ -114,8 +117,14 @@ def main() -> None:
         for seed in range(a.simulate):
             per_subject.append(run_subject(*simulate_subject(seed, geometry, settings), geometry, a.meta_init))
     elif a.recordings:
-        per_subject = run_recordings(sorted(glob.glob(a.recordings)), settings, a.meta_init)
+        est = None
+        if a.gaze_model:
+            from gazeos.inference.gaze import OnnxGazeEstimator
+
+            est = OnnxGazeEstimator(a.gaze_model)
+        per_subject = run_recordings(sorted(glob.glob(a.recordings)), settings, a.meta_init, est)
     result = summarize(per_subject)
+    result["estimator"] = ("simulated" if a.simulate else a.gaze_model or "geometric baseline M0")
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).write_text(json.dumps(result, indent=2))
     if a.figure:
@@ -125,8 +134,13 @@ def main() -> None:
     print(json.dumps(result["error_deg"], indent=2))
 
 
-def run_recordings(paths: list[str], settings: Settings, meta_init: str | None) -> list[dict[str, dict[int, float]]]:
-    """GazeOS-Webcam: calibrate on sessions 1-2, test on session 3 of the same participant."""
+def run_recordings(paths: list[str], settings: Settings, meta_init: str | None,
+                   gaze_model: object | None = None) -> list[dict[str, dict[int, float]]]:
+    """GazeOS-Webcam: calibrate on sessions 1-2, test on session 3 of the same participant.
+
+    With `gaze_model` (an `OnnxGazeEstimator`) each frame's saved crops go through the
+    network, as in the app; a recording without crops is an error then. Without it the
+    geometric baseline M0 is replayed."""
     from gazeos.recording import RecordedSession
 
     by_participant: dict[str, list[str]] = defaultdict(list)
@@ -145,14 +159,20 @@ def run_recordings(paths: list[str], settings: Settings, meta_init: str | None) 
                 setattr(s.screen, k, v)
         geometry = ScreenGeometry.from_settings(s.screen)
         K = CameraIntrinsics.default(int(meta["camera"]["width"]), int(meta["camera"]["height"]))
-        proc = FrameProcessor(s, geometry, K, None)
+        proc = FrameProcessor(s, geometry, K, None, gaze_model)  # type: ignore[arg-type]
         by_target: dict[tuple[float, float], list[CalibrationSample]] = defaultdict(list)
         test: list[CalibrationSample] = []
         for si, sess in enumerate(sessions):
+            if gaze_model is not None and sess.faces is None:
+                raise ValueError(f"{files[si]} has no saved crops: record with research recording on, "
+                                 "or leave out --gaze-model to replay the geometric baseline")
             for fr in sess.frames():
                 if fr.target_px is None:
                     continue
-                obs = proc.process_landmarks(fr.landmarks, fr.t).observation
+                crops = None
+                if gaze_model is not None and fr.face is not None and fr.right_eye is not None and fr.left_eye is not None:
+                    crops = (fr.face, fr.right_eye, fr.left_eye)
+                obs = proc.process_landmarks(fr.landmarks, fr.t, crops=crops).observation
                 if obs is None:
                     continue
                 smp = CalibrationSample(obs, np.asarray(fr.target_px, float), t=fr.t)

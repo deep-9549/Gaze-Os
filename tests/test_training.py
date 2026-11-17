@@ -421,3 +421,25 @@ def test_ablation_starts_from_a_checkpoint_with_other_shapes(tmp_path) -> None:
         for i, arm in enumerate(["model.fusion=concat", "model.use_face=false"]):
             result = train(compose("train", overrides=[*base, init, arm, f"output_dir={(tmp_path / str(i)).as_posix()}"]))
             assert np.isfinite(result["history"][0]["train_loss"])
+
+
+def test_train_without_validation_subjects_keeps_the_last_epoch(tmp_path) -> None:
+    """data.val_fraction=0 (the standard leave-one-subject-out protocol): every other subject
+    trains, nothing is selected, and the fixed schedule's last epoch is tested."""
+    from pathlib import Path
+
+    import torch
+    from hydra import compose, initialize_config_dir
+
+    from training.train import train
+
+    pack_synthetic(str(tmp_path / "shards"), subjects=3, per_subject=8)
+    overrides = ["experiment=smoke_synthetic", f"data.shards=[{(tmp_path / 'shards').as_posix()}/*.h5]",
+                 f"output_dir={(tmp_path / 'run').as_posix()}", "data.val_fraction=0", "train.batch_size=4",
+                 "train.epochs=3", "train.patience=0"]
+    config_dir = str((Path(__file__).parents[1] / "configs").resolve())
+    with initialize_config_dir(config_dir=config_dir, version_base="1.3"):
+        r = train(compose("train", overrides=overrides))
+    assert r["split"]["val"] == [] and len(r["split"]["train"]) == 2 and len(r["split"]["test"]) == 1
+    assert len(r["history"]) == 3 and r["best_epoch"] == 2 and "test" in r
+    assert torch.load(tmp_path / "run" / "best.pt", map_location="cpu")["epoch"] == 2

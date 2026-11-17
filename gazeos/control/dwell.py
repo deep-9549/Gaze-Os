@@ -46,6 +46,10 @@ class DwellClicker:
         (used when the magnifier opens right where the last dwell fired)."""
         self._fired_point = None
 
+    def hold(self, seconds: float) -> None:
+        """Do not count `seconds` toward the dwell (no valid gaze sample arrived in that time)."""
+        self._start += seconds
+
     def update(self, t: float, xy: FloatArray, enabled: bool = True) -> DwellUpdate:
         xy = np.asarray(xy, dtype=np.float64)
         if not enabled:

@@ -73,6 +73,12 @@ class EngineOutput:
 
 
 class ControlEngine:
+    # Gaps between valid gaze samples. Up to FRAME_GAP_S is ordinary frame timing. A longer
+    # gap (a blink, a dropped frame) is not counted toward a dwell; past MAX_DWELL_GAP_S
+    # tracking was lost and the dwell starts again.
+    FRAME_GAP_S = 0.15
+    MAX_DWELL_GAP_S = 0.6
+
     def __init__(
         self,
         settings: Settings,
@@ -93,22 +99,9 @@ class ControlEngine:
         self.drift = DriftCorrector()
         self.history = GazeHistory()
         self.px_per_deg = geometry.deg_to_px(1.0)
-        self.filter: PointFilter = make_filter(settings.filter, self.px_per_deg)
-        self.fixation = FixationDetector(
-            self.px_per_deg,
-            saccade_jump_deg=settings.fixation.saccade_jump_deg,
-            dispersion_deg=settings.fixation.dispersion_deg,
-            min_fixation_ms=settings.fixation.min_fixation_ms,
-            confirm_frames=settings.fixation.saccade_confirm_frames,
-            hold_deadband_deg=settings.fixation.hold_deadband_deg,
-            hold_ease=settings.fixation.hold_ease,
-            hold_lock_after_s=settings.fixation.hold_lock_after_ms / 1000.0,
-        )
-        self.dwell = DwellClicker(
-            settings.dwell.dwell_ms, settings.dwell.radius_deg * self.px_per_deg, settings.dwell.cooldown_ms
-        )
-        self.snapper = TargetSnapper(settings.snap.probability_threshold, settings.snap.radius_sigmas)
         self._dwell_target: GazeTarget | None = None
+        self._last_valid_t: float | None = None  # time of the last valid gaze sample
+        self._build(settings)
         self.action = Action.LEFT
         self.dragging = False
         self.paused = False
@@ -125,7 +118,44 @@ class ControlEngine:
         self.error_px = settings.dwell.radius_deg * self.px_per_deg  # updated after validation
         self.event_log: list[tuple[float, str]] = []
 
+    def _build(self, settings: Settings) -> None:
+        """The parts that copy values out of the settings when they are made."""
+        self.filter: PointFilter = make_filter(settings.filter, self.px_per_deg)
+        self.fixation = FixationDetector(
+            self.px_per_deg,
+            saccade_jump_deg=settings.fixation.saccade_jump_deg,
+            dispersion_deg=settings.fixation.dispersion_deg,
+            min_fixation_ms=settings.fixation.min_fixation_ms,
+            confirm_frames=settings.fixation.saccade_confirm_frames,
+            hold_deadband_deg=settings.fixation.hold_deadband_deg,
+            hold_ease=settings.fixation.hold_ease,
+            hold_lock_after_s=settings.fixation.hold_lock_after_ms / 1000.0,
+        )
+        self.dwell = DwellClicker(
+            settings.dwell.dwell_ms, settings.dwell.radius_deg * self.px_per_deg, settings.dwell.cooldown_ms
+        )
+        self.snapper = TargetSnapper(settings.snap.probability_threshold, settings.snap.radius_sigmas)
+
     # -- public controls -------------------------------------------------------
+    def apply_settings(self, settings: Settings) -> None:
+        """Saved settings take effect at once: the dwell clicker, filter, fixation detector
+        and snapper are rebuilt from them (they keep their own copies of the values)."""
+        self.s = settings
+        self._build(settings)
+        self._dwell_target = None
+
+    def release_inputs(self) -> None:
+        """Let go of everything the engine may be holding or about to do: a held mouse
+        button, a running dwell, an open magnifier. Called on pause, before calibration,
+        on exit and when the camera stops. A click by blink needs a fresh gaze sample after."""
+        if self.dragging:
+            self._end_drag()
+        self.dwell.reset()
+        self._dwell_target = None
+        self.zoom = None
+        self._frozen = None
+        self._last_valid_t = None
+
     def set_action(self, action: Action) -> None:
         if self.dragging and action != Action.DRAG:
             self._end_drag()
@@ -135,12 +165,9 @@ class ControlEngine:
         self.set_paused(not self.paused, reason)
 
     def set_paused(self, paused: bool, reason: str = "user") -> None:
-        if paused and self.dragging:
-            self._end_drag()
+        self.release_inputs()
         self.paused = paused
         self.auto_paused = paused and reason == "face_lost"
-        self.dwell.reset()
-        self.zoom = None
         self._log(0.0, f"{'pause' if paused else 'resume'}:{reason}")
 
     def emergency_stop(self) -> None:
@@ -204,6 +231,13 @@ class ControlEngine:
             self._frozen = None
 
         if point is not None:
+            gap = 0.0 if self._last_valid_t is None else t - self._last_valid_t
+            if gap > self.MAX_DWELL_GAP_S:
+                self.dwell.reset()  # tracking was lost: a dwell from before must not finish now
+                self._dwell_target = None
+            elif gap > self.FRAME_GAP_S:
+                self.dwell.hold(gap)
+            self._last_valid_t = t
             self.cursor = point
         cursor = self._frozen if self._frozen is not None else self.cursor
 
@@ -224,7 +258,7 @@ class ControlEngine:
                 if self.dragging:
                     events.append("dragging")
             # Clicking from blinks and gestures, at the frozen point.
-            fired_by = self._discrete_click(inp, cursor, t)
+            fired_by = self._discrete_click(inp, cursor, t, self._trusted(q, t))
             if fired_by:
                 events.append(fired_by)
             # Scrolling zones.
@@ -354,7 +388,15 @@ class ControlEngine:
         self.backend.scroll(0, direction * self.s.scroll.step)
         return True
 
-    def _discrete_click(self, inp: EngineInput, cursor: FloatArray, t: float) -> str | None:
+    def _trusted(self, q: QualityReport, t: float) -> bool:
+        """May a blink or gesture act at the cursor? Only with one face in view and a valid
+        gaze sample recent enough to be from just before the blink."""
+        if q.status in (TrackingStatus.NO_FACE, TrackingStatus.MULTIPLE_FACES, TrackingStatus.MOVE_CLOSER):
+            return False
+        limit = self.s.blink.long_blink_max_ms / 1000.0 + 0.5
+        return self._last_valid_t is not None and t - self._last_valid_t <= limit
+
+    def _discrete_click(self, inp: EngineInput, cursor: FloatArray, t: float, trusted: bool = True) -> str | None:
         mapping = self.s.gestures.mapping
         name: str | None = None
         if inp.blink_event in (BlinkEvent.LONG_BLINK, BlinkEvent.LEFT_WINK, BlinkEvent.RIGHT_WINK):
@@ -369,6 +411,11 @@ class ControlEngine:
         if action == "pause":
             self.toggle_pause("gesture")
             return "pause_toggle"
+        if action == "drag_toggle" and self.dragging:  # letting go is always allowed
+            self._end_drag()
+            return f"{name}:drag"
+        if not trusted:
+            return None
         if action == "drag_toggle":
             if self.dragging:
                 self._end_drag()
@@ -423,7 +470,9 @@ class ControlEngine:
                 assert decision.point is not None
                 x, y = decision.point
                 self.snapper.note_used(decision.element, t)
-            elif elements and (decision.element is None or decision.point is None):
+            elif elements:
+                # No confident target, or one smaller than the tracker's error: magnify
+                # instead of clicking where the cursor happens to be.
                 self.zoom = make_zoom_region(
                     (x, y), self.geometry.width_px, self.geometry.height_px,
                     self.s.snap.zoom_region_px, self.s.snap.zoom_factor,

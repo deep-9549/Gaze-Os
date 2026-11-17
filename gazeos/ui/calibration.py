@@ -85,6 +85,13 @@ class CalibrationWindow(QWidget):
         self.fail_message = ""
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
+        # The step that happens by itself when nobody presses a button (settings: auto_*).
+        self._auto_at: float | None = None
+        self._auto_step: Callable[[], None] | None = None
+        self._auto_text = ""
+        self._auto_redos = 0
+        self._auto_timer = QTimer(self)
+        self._auto_timer.timeout.connect(self._auto_tick)
         self._build_buttons()
 
     def _build_buttons(self) -> None:
@@ -103,7 +110,7 @@ class CalibrationWindow(QWidget):
             lay.addWidget(b)
         self.start_btn.clicked.connect(self.start)
         self.accept_btn.clicked.connect(self._accept)
-        self.redo_btn.clicked.connect(self.restart)
+        self.redo_btn.clicked.connect(self._manual_redo)
         self.cancel_btn.clicked.connect(lambda: self._finish(None))
         self.accept_btn.hide()
         self.redo_btn.hide()
@@ -112,8 +119,51 @@ class CalibrationWindow(QWidget):
         outer.addWidget(self.buttons, 0, Qt.AlignmentFlag.AlignHCenter)
         outer.addStretch(1)
 
+    # -- steps without a button ------------------------------------------------
+    def showEvent(self, event: object) -> None:  # noqa: N802
+        if self.phase == "intro" and self.s.auto_start_s > 0:
+            self._arm(self.s.auto_start_s, self.start, "Starting")
+
+    def _arm(self, seconds: float, step: Callable[[], None], text: str) -> None:
+        self._auto_at, self._auto_step, self._auto_text = time.monotonic() + seconds, step, text
+        self._auto_timer.start(200)
+
+    def _disarm(self) -> None:
+        self._auto_at = self._auto_step = None
+        self._auto_timer.stop()
+
+    def _auto_tick(self) -> None:
+        if self._auto_at is not None and time.monotonic() >= self._auto_at and self._auto_step is not None:
+            step = self._auto_step
+            self._disarm()
+            step()
+        self.update()
+
+    def _auto_redo(self) -> None:
+        self._auto_redos += 1
+        self.restart()
+
+    def _manual_redo(self) -> None:
+        self._auto_redos = 0  # a person is here: count again from the start
+        self.restart()
+
+    def _arm_after_run(self, good: bool) -> None:
+        """What happens by itself after a run: accept a good one; repeat a poor or failed one
+        a few times; then keep what there is (a poor fit) or close (no fit), so that a person
+        who cannot press a button is never left on this screen."""
+        d = self.s.auto_decide_s
+        if good:
+            self._arm(d, self._accept, "Accepting")
+        elif self._auto_redos < self.s.auto_redo_limit:
+            self._arm(d + 2.0, self._auto_redo, "Trying again")
+        elif self.result is not None:
+            self._arm(d + 2.0, self._accept, "Keeping this result")
+        else:
+            self._arm(d + 4.0, lambda: self._finish(None), "Closing (the earlier calibration is kept)")
+
     # -- flow ------------------------------------------------------------------
     def start(self) -> None:
+        self._disarm()
         with self._lock:
             self.phase = "calibrate"
             self.index = -1
@@ -222,6 +272,7 @@ class CalibrationWindow(QWidget):
             self.redo_btn.show()
             self.buttons.show()
             self.start_btn.hide()
+            self._arm_after_run(good=False)
             self.update()
             return
         self.personalizer.fit(self.samples)
@@ -237,6 +288,7 @@ class CalibrationWindow(QWidget):
         self.accept_btn.show()
         self.redo_btn.show()
         self.buttons.show()
+        self._arm_after_run(good=self.result is not None and self.result.score >= self.s.auto_accept_score)
         self.update()
 
     def _accept(self) -> None:
@@ -244,6 +296,7 @@ class CalibrationWindow(QWidget):
             self._finish(CalibrationOutcome(self.samples, self.personalizer, self.result))
 
     def _finish(self, outcome: CalibrationOutcome | None) -> None:
+        self._disarm()
         self._timer.stop()
         self.phase = "done"
         self.close()
@@ -300,4 +353,9 @@ class CalibrationWindow(QWidget):
         elif self.phase == "failed":
             p.drawText(top.adjusted(80, 0, -80, 60), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
                        self.fail_message)
+        if self._auto_at is not None:
+            left = max(0, int(self._auto_at - time.monotonic()) + 1)
+            p.setPen(color(self.theme_name, "calib_fg" if light else "fg"))
+            p.drawText(QRectF(0, self.height() - 110, self.width(), 40), Qt.AlignmentFlag.AlignCenter,
+                       f"{self._auto_text} in {left} s")
         p.end()

@@ -31,7 +31,7 @@ from gazeos.vision.enhance import mean_brightness
 from gazeos.vision.geometry import head_direction_pitchyaw, rotation_to_euler
 from gazeos.vision.head_pose import CameraIntrinsics, HeadPose, HeadPoseEstimator
 from gazeos.vision.landmarks import LandmarkResult
-from gazeos.vision.normalization import NormalizationResult, normalize
+from gazeos.vision.normalization import NormalizationResult, normalize, warp_matrix
 from gazeos.vision.quality import QualityGate, QualityReport
 
 log = logging.getLogger(__name__)
@@ -87,6 +87,15 @@ class FrameProcessor:
         q = settings.quality
         self.lids = LidGate(q.lid_hidden_level, q.lid_speed, q.lid_hold_frames)
 
+    def apply_settings(self, settings: Settings) -> None:
+        """Saved settings take effect at once (the gates and detectors copy their values)."""
+        self.s = settings
+        self.quality = QualityGate(settings.quality)
+        self.blinks = BlinkDetector(settings.blink)
+        self.gestures = GestureEventDetector(settings.gestures.probability_threshold, settings.gestures.refractory_ms)
+        q = settings.quality
+        self.lids = LidGate(q.lid_hidden_level, q.lid_speed, q.lid_hold_frames)
+
     def process_image(self, image_rgb: NDArray[np.uint8], t: float) -> ProcessedFrame:
         if self.landmarker is None:
             raise RuntimeError("no landmarker configured")
@@ -98,9 +107,14 @@ class FrameProcessor:
         return out
 
     def process_landmarks(
-        self, lm: LandmarkResult, t: float, image_rgb: NDArray[np.uint8] | None = None
+        self, lm: LandmarkResult, t: float, image_rgb: NDArray[np.uint8] | None = None,
+        crops: tuple[NDArray[np.uint8], NDArray[np.uint8], NDArray[np.uint8]] | None = None,
     ) -> ProcessedFrame:
-        """Everything after face landmarks; image is needed for the CNN and brightness."""
+        """Everything after face landmarks; image is needed for the CNN and brightness.
+
+        `crops` (normalized face, right eye, left eye) replays a research recording through
+        the CNN without the camera image: the crops are the saved ones, the normalization
+        rotation is recomputed from the landmarks."""
         timings: dict[str, float] = {}
         res = FrameResult(t_capture=t, num_faces=lm.num_faces)
         if image_rgb is not None:
@@ -172,8 +186,14 @@ class FrameProcessor:
         norm = estimate = obs = None
         if q.ok:
             tg = time.perf_counter()
-            if self.gaze_model is not None and image_rgb is not None:
-                norm = normalize(image_rgb, landmarks, pose, self.intrinsics)
+            if self.gaze_model is not None and (image_rgb is not None or crops is not None):
+                if image_rgb is not None:
+                    norm = normalize(image_rgb, landmarks, pose, self.intrinsics)
+                else:
+                    assert crops is not None
+                    W, R_n, S = warp_matrix(pose.face_center, pose.R, self.intrinsics)
+                    norm = NormalizationResult(crops[0], crops[1], crops[2], R_n, S, W,
+                                               rotation_to_euler(R_n @ pose.R))
                 timings["normalize"] = (time.perf_counter() - tg) * 1000.0
                 tn = time.perf_counter()
                 estimate = self.gaze_model.estimate(norm)
@@ -230,14 +250,34 @@ class ProcessingThread(threading.Thread):
         self._stop_evt = threading.Event()
         self.fps = 0.0
         self._lock = threading.Lock()
+        self.stalled = False
+
+    # No frame for this long, or this many frames failing in a row: stop acting.
+    STALL_S = 1.0
+    STALL_FAILURES = 15
+
+    def _stall(self) -> None:
+        """The camera stopped or processing keeps failing. The engine only sees frames, so
+        without this a held drag or a running dwell would stay as it was. Pauses like a
+        lost face, so control resumes by itself when frames return (if that is enabled)."""
+        self.stalled = True
+        with self._lock:
+            if self.engine is not None and not self.engine.paused:
+                self.engine.set_paused(True, "face_lost")
+        log.warning("no usable camera frames; input paused")
 
     def run(self) -> None:
         last = time.monotonic()
         frames = 0
+        last_frame = time.monotonic()
+        failures = 0
         while not self._stop_evt.is_set():
             frame = self.capture.latest(timeout=0.5)  # type: ignore[attr-defined]
             if frame is None:
+                if not self.stalled and time.monotonic() - last_frame > self.STALL_S:
+                    self._stall()
                 continue
+            last_frame = time.monotonic()
             t0 = time.perf_counter()
             try:
                 pf = self.processor.process_image(frame.image_rgb, frame.t_capture)
@@ -254,8 +294,13 @@ class ProcessingThread(threading.Thread):
                     pf.result.state = out.state.value
                 if self.on_frame is not None:
                     self.on_frame(pf, out, frame.image_rgb)
+                failures = 0
+                self.stalled = False
             except Exception:
                 log.exception("frame processing failed")
+                failures += 1
+                if failures == self.STALL_FAILURES:
+                    self._stall()
             frames += 1
             now = time.monotonic()
             if now - last >= 1.0:

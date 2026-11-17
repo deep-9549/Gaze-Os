@@ -1,0 +1,213 @@
+"""No action the user did not choose: lost tracking, a stopped camera, calibration and exit
+(fable_opinion.md section 5)."""
+
+from __future__ import annotations
+
+import time
+
+import numpy as np
+import pytest
+
+from gazeos.calibration.protocol import GazeObservation
+from gazeos.capture.camera import CaptureThread
+from gazeos.control.engine import Action, ControlEngine, EngineInput
+from gazeos.gestures.blink import BlinkEvent
+from gazeos.inference.gaze import GazeEstimate
+from gazeos.os_backends.base import RecordingBackend
+from gazeos.pipeline import FrameProcessor, ProcessingThread
+from gazeos.types import Rect, TrackingStatus, UIElement
+from gazeos.vision.quality import QualityReport
+
+OK = QualityReport(ok=True, status=TrackingStatus.TRACKING)
+HELD = QualityReport(ok=False, status=TrackingStatus.TRACKING, hold_cursor=True)
+POINT = (700.0, 500.0)
+
+
+def _obs(px=POINT) -> GazeObservation:
+    return GazeObservation(np.zeros(2), np.array([0.0, 100.0, 600.0]), np.asarray(px, float))
+
+
+def _engine(settings, geometry, backend=None):
+    settings.snap.enabled = False
+    backend = backend or RecordingBackend()
+    return ControlEngine(settings, geometry, backend), backend
+
+
+def _feed(engine, t0, seconds, valid=True, quality=None, **kw):
+    """30 frames a second from t0; returns the time of the last frame."""
+    t = t0
+    for _ in range(int(round(seconds * 30))):
+        t += 1 / 30
+        engine.update(EngineInput(t, _obs() if valid else None, quality or (OK if valid else HELD), **kw))
+    return t
+
+
+def test_dwell_does_not_finish_on_the_first_frame_after_lost_tracking(settings, geometry) -> None:
+    eng, be = _engine(settings, geometry)
+    t = _feed(eng, 0.0, 0.3)
+    t = _feed(eng, t, 1.0, valid=False)  # longer than the 800 ms dwell
+    t = _feed(eng, t, 0.2)
+    assert not be.of_kind("click")
+    _feed(eng, t, 0.9)  # a full dwell of valid samples does click
+    assert be.of_kind("click") == [("click", "left", 1)]
+
+
+def test_a_blink_inside_a_dwell_is_not_counted_toward_it(settings, geometry) -> None:
+    eng, be = _engine(settings, geometry)
+    t = _feed(eng, 0.0, 0.4)
+    t = _feed(eng, t, 0.3, valid=False)  # an ordinary blink
+    t = _feed(eng, t, 0.2)  # 0.9 s on the clock, 0.6 s of gaze
+    assert not be.of_kind("click")
+    _feed(eng, t, 0.3)
+    assert be.of_kind("click") == [("click", "left", 1)]
+
+
+@pytest.mark.parametrize("status", [TrackingStatus.MULTIPLE_FACES, TrackingStatus.NO_FACE, TrackingStatus.MOVE_CLOSER])
+def test_blink_click_needs_one_tracked_face(settings, geometry, status) -> None:
+    settings.dwell.enabled = False
+    eng, be = _engine(settings, geometry)
+    t = _feed(eng, 0.0, 0.5)
+    eng.update(EngineInput(t + 0.5, None, QualityReport(ok=False, status=status), blink_event=BlinkEvent.LONG_BLINK))
+    assert not be.of_kind("click")
+
+
+def test_blink_click_needs_a_recent_gaze_sample(settings, geometry) -> None:
+    settings.dwell.enabled = False
+    eng, be = _engine(settings, geometry)
+    t = _feed(eng, 0.0, 0.5)
+    eng.update(EngineInput(t + 4.0, None, HELD, blink_event=BlinkEvent.LONG_BLINK))  # the cursor is 4 s old
+    assert not be.of_kind("click")
+    t = _feed(eng, t + 4.0, 0.2)
+    eng.update(EngineInput(t + 0.5, None, HELD, blink_event=BlinkEvent.LONG_BLINK))
+    assert be.of_kind("click") == [("click", "left", 1)]
+
+
+def test_small_target_chosen_with_confidence_opens_the_magnifier(settings, geometry) -> None:
+    be = RecordingBackend(elements=[UIElement(Rect(752, 492, 16, 16))])  # one 16 px button, 60 px from the gaze
+    eng = ControlEngine(settings, geometry, be)
+    _feed(eng, 0.0, 1.2)
+    assert eng.zoom is not None and not be.of_kind("click")
+
+
+def test_release_inputs_lets_go_of_a_drag_without_pausing(settings, geometry) -> None:
+    eng, be = _engine(settings, geometry)
+    eng.set_action(Action.DRAG)
+    _feed(eng, 0.0, 1.2)
+    assert eng.dragging
+    eng.release_inputs()
+    assert not eng.dragging and be.of_kind("release") and not eng.paused
+
+
+def test_saved_settings_reach_the_running_dwell(settings, geometry) -> None:
+    eng, be = _engine(settings, geometry)
+    changed = settings.model_copy(deep=True)
+    changed.dwell.dwell_ms = 1600.0
+    eng.apply_settings(changed)
+    t = _feed(eng, 0.0, 1.2)
+    assert not be.of_kind("click")  # the old 800 ms would have clicked
+    _feed(eng, t, 0.7)
+    assert be.of_kind("click")
+
+
+class _DeadCamera:
+    def latest(self, timeout: float = 0.5):
+        time.sleep(0.02)
+        return None
+
+
+def test_a_stopped_camera_releases_the_drag_and_pauses(settings, geometry, intrinsics) -> None:
+    eng, be = _engine(settings, geometry)
+    eng.set_action(Action.DRAG)
+    _feed(eng, 0.0, 1.2)
+    assert eng.dragging
+    worker = ProcessingThread(_DeadCamera(), FrameProcessor(settings, geometry, intrinsics, None), eng)
+    worker.STALL_S = 0.1
+    worker.start()
+    deadline = time.monotonic() + 3
+    while not worker.stalled and time.monotonic() < deadline:
+        time.sleep(0.02)
+    worker.stop()
+    worker.join(2.0)
+    assert worker.stalled and eng.paused and eng.auto_paused and not eng.dragging and be.of_kind("release")
+
+
+class _BlankSource:
+    def read(self):
+        time.sleep(0.005)
+        return np.zeros((4, 4, 3), np.uint8)
+
+    def release(self) -> None:
+        pass
+
+
+def test_capture_thread_can_be_joined() -> None:
+    cap = CaptureThread(_BlankSource())
+    cap.start()
+    assert cap.latest(1.0) is not None
+    cap.stop()
+    cap.join(2.0)  # raised TypeError while the stop flag was named like Thread._stop
+    assert not cap.is_alive()
+
+
+class _CountingModel:
+    def __init__(self) -> None:
+        self.seen: list[object] = []
+
+    def estimate(self, norm):
+        self.seen.append(norm)
+        return GazeEstimate(np.zeros(2), np.zeros(2), np.radians(np.array([3.0, 3.0])), np.zeros(256))
+
+
+def test_saved_crops_replay_through_the_gaze_network(settings, geometry, intrinsics, user) -> None:
+    """E6 on recordings: the crops stored with a research recording reach the network."""
+    model = _CountingModel()
+    proc = FrameProcessor(settings, geometry, intrinsics, None, model)
+    face = np.full((224, 224, 3), 7, np.uint8)
+    eye = np.zeros((36, 60), np.uint8)
+    pf = proc.process_landmarks(user.look_at(960, 540), 0.1, crops=(face, eye, eye))
+    assert len(model.seen) == 1 and model.seen[0].face is face
+    assert np.allclose(model.seen[0].R_n @ model.seen[0].R_n.T, np.eye(3), atol=1e-9)
+    assert pf.observation is not None and pf.observation.features is not None
+    # Without crops or an image the geometric baseline answers instead.
+    proc.process_landmarks(user.look_at(960, 540), 0.2)
+    assert len(model.seen) == 1
+
+
+def test_calibration_runs_and_accepts_without_any_button(qtbot, settings, geometry, intrinsics, user) -> None:
+    pytest.importorskip("PySide6")
+    from gazeos.calibration.personalization import make_personalizer
+    from gazeos.settings import CalibrationSettings
+    from gazeos.ui.calibration import CalibrationWindow
+
+    outcomes: list[object] = []
+    cal = CalibrationSettings(target_duration_s=0.3, keep_from_s=0.05, min_samples_per_point=3,
+                              auto_start_s=0.2, auto_decide_s=1.0)
+    win = CalibrationWindow(geometry, make_personalizer("polynomial", geometry), cal, outcomes.append)
+    qtbot.addWidget(win)
+    win.resize(800, 600)
+    win.show()
+    proc = FrameProcessor(settings, geometry, intrinsics, None)
+    deadline = time.monotonic() + 20
+    while not outcomes and time.monotonic() < deadline:
+        pts = win._points()
+        if win.phase in ("calibrate", "validate") and 0 <= win.index < len(pts):
+            pf = proc.process_landmarks(user.look_at(*pts[win.index]), time.monotonic())
+            win.add_frame(time.monotonic(), pf.observation, False)
+        qtbot.wait(10)
+    assert outcomes and outcomes[0] is not None and outcomes[0].validation.score >= 70
+
+
+def test_calibration_without_eye_data_retries_then_closes_by_itself(qtbot, geometry) -> None:
+    pytest.importorskip("PySide6")
+    from gazeos.calibration.personalization import make_personalizer
+    from gazeos.settings import CalibrationSettings
+    from gazeos.ui.calibration import CalibrationWindow
+
+    outcomes: list[object] = []
+    cal = CalibrationSettings(target_duration_s=0.05, keep_from_s=0.01, auto_start_s=0.1, auto_decide_s=1.0,
+                              auto_redo_limit=1)
+    win = CalibrationWindow(geometry, make_personalizer("polynomial", geometry), cal, outcomes.append)
+    qtbot.addWidget(win)
+    win.show()
+    qtbot.waitUntil(lambda: bool(outcomes), timeout=30000)
+    assert outcomes == [None] and win._auto_redos == 1

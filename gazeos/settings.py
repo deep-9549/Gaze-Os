@@ -196,6 +196,14 @@ class CalibrationSettings(_Section):
     # and calibration stops rather than guess a missing area (REVIEW.md item 12).
     min_samples_per_point: int = Field(10, ge=1)
     method: Literal["none", "offset", "polynomial", "gp", "finetune"] = "polynomial"
+    # Calibration runs without its buttons, which gaze cannot press (the engine is off while
+    # it runs): it starts after `auto_start_s`, accepts a score of `auto_accept_score` or
+    # more after `auto_decide_s`, and otherwise repeats up to `auto_redo_limit` times. The
+    # buttons stay for a helper with a mouse. `auto_start_s` 0 waits for the Start button.
+    auto_start_s: float = Field(5.0, ge=0.0)
+    auto_decide_s: float = Field(6.0, ge=1.0)
+    auto_accept_score: int = Field(60, ge=0, le=100)
+    auto_redo_limit: int = Field(2, ge=0)
     # Off: a gaze click lands where the cursor is, so its label repeats the tracker's own
     # error; 20 typed keys moved the Space row 9-10 mm up (ADR 0009).
     implicit_enabled: bool = False

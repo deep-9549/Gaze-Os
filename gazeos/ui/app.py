@@ -406,7 +406,10 @@ class GazeOSApp(QObject):
         self.overlay.show_toast("Settings saved. Restart GazeOS to apply camera and model changes.", 4)
         self.settings = settings
         with self.worker.with_engine():
-            self.engine.s = settings
+            # Dwell time, filter, fixation, blink and quality values are copied into their
+            # objects when those are made, so they are remade here.
+            self.engine.apply_settings(settings)
+            self.processor.apply_settings(settings)
 
     def _show_privacy(self) -> None:
         self._privacy = PrivacyPanel(self.profile, self._data_deleted, self.settings.theme)
@@ -435,6 +438,7 @@ class GazeOSApp(QObject):
 
     def start_calibration(self, quick: bool = False) -> None:
         with self.worker.with_engine():
+            self.engine.release_inputs()  # a drag or a running dwell must not outlive the engine
             self.worker.engine_enabled = False  # no clicks while calibrating
         p = self.personalizer if quick else make_personalizer(self.settings.calibration.method, self.geometry)
         self.calibration = CalibrationWindow(
@@ -500,8 +504,12 @@ class GazeOSApp(QObject):
 
     # -- lifecycle -----------------------------------------------------------------
     def quit(self) -> None:
+        with self.worker.with_engine():
+            self.engine.release_inputs()  # never exit with the mouse button held
+            self.worker.engine_enabled = False
         self.worker.stop()
         self.capture.stop()
+        self.worker.join(2.0)
         if self.logger is not None:
             self.logger.close()
         if self.heatmap is not None:
