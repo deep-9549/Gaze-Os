@@ -38,7 +38,7 @@ from gazeos.ui.debug_view import DebugView
 from gazeos.ui.keyboard import KeyboardWindow
 from gazeos.ui.onboarding import Onboarding
 from gazeos.ui.overlay import Overlay
-from gazeos.ui.panels import ButtonPanel, ConfirmPanel, PrivacyPanel
+from gazeos.ui.panels import ButtonPanel, ConfirmPanel, PrivacyPanel, global_rect
 from gazeos.ui.settings_dialog import SettingsDialog
 from gazeos.vision.head_pose import CameraIntrinsics
 
@@ -139,6 +139,7 @@ class GazeOSApp(QObject):
         self.calibration: CalibrationWindow | None = None
         self.keyboard: KeyboardWindow | None = None
         self.onboarding: Onboarding | None = None
+        self._confirm_panel: ConfirmPanel | None = None  # the open yes/no question, if any
         self.logger = ExperimentLogger(self.profile.logs_dir) if self.settings.privacy.experiment_logging else None
         self.heatmap = (HeatmapRecorder(self.geometry.width_px, self.geometry.height_px)
                         if self.settings.privacy.heatmaps else None)
@@ -201,8 +202,8 @@ class GazeOSApp(QObject):
             ("Privacy", "menu_privacy", self._show_privacy),
             ("Debug view", "menu_debug", self._toggle_debug),
             ("Pause / resume", "menu_pause", self.toggle_pause),
-            ("Hide overlay", "menu_overlay", self._toggle_overlay),
-            ("Quit GazeOS", "menu_quit", self.quit),
+            ("Hide gaze cursor", "menu_overlay", self._toggle_overlay),
+            ("Quit GazeOS", "menu_quit", self._ask_quit),  # asks first; the tray's Quit (mouse) does not
         ], th)
         self.shortcuts = ButtonPanel("Shortcuts", [
             (label, f"sc_{name}", self._shortcut_runner(name))
@@ -211,7 +212,7 @@ class GazeOSApp(QObject):
                                 ("Close window", "close_window"), ("Start menu", "start_menu"),
                                 ("New tab", "new_tab"), ("Close tab", "close_tab"))
         ], th, columns=4)
-        for group, w in (("menu", self.menu), ("shortcuts", self.shortcuts)):
+        for group, w in (("menu", self.menu), ("shortcuts", self.shortcuts), ("debug", self.debug)):
             self.sync.track(group, w)
         self._tray()
         if not self.profile.has_calibration() and not self.simulate:
@@ -323,6 +324,12 @@ class GazeOSApp(QObject):
     def toggle_pause(self) -> None:
         with self.worker.with_engine():
             self.engine.toggle_pause("user")
+            paused = self.engine.paused
+        if paused:
+            # While paused no GazeOS button answers a look, the action bar's Resume included;
+            # the top-left corner does. Say so, or a pause by a stray glance looks permanent.
+            s = self.settings.system.corner_pause_dwell_ms / 1000
+            self.overlay.show_toast(f"Paused. To resume, look at the top-left corner of the screen for {s:g} s.", 8)
 
     def emergency_stop(self) -> None:
         with self.worker.with_engine():
@@ -337,13 +344,31 @@ class GazeOSApp(QObject):
                 self.backend.hotkey(*shortcut_keys(name, sys.platform))
 
         def ask() -> None:
-            question = f"Really {name.replace('_', ' ')}? Unsaved work may be lost."
-            self._confirm_panel = ConfirmPanel(question, run, self.settings.theme)
-            self.sync.track("confirm", self._confirm_panel)
-            self._confirm_panel.show()
+            words = name.replace("_", " ")
+            button = self.shortcuts.buttons.get(f"sc_{name}")
+            self._present_confirm(ConfirmPanel(
+                f"Really {words}? Unsaved work may be lost.", run, self.settings.theme, yes_label=f"Yes, {words}",
+                avoid=global_rect(button) if button is not None else None))
 
         self.bridge.call.emit(ask)
         return False
+
+    def _present_confirm(self, panel: ConfirmPanel) -> None:
+        """Show a yes/no question and make it gaze-operable; it replaces any open one."""
+        old = self._confirm_panel
+        if old is not None and old is not panel:
+            old.dismiss()
+        self._confirm_panel = panel
+        panel.show()
+        self.sync.track("confirm", panel)  # after show: its buttons are registered where they ended up
+
+    def _ask_quit(self) -> None:
+        """Quit from the gaze menu needs a separate Yes, placed away from the Quit button: a person
+        without hands cannot start GazeOS again. No answer within 10 s is No."""
+        self._present_confirm(ConfirmPanel(
+            "Quit GazeOS?", self.quit, self.settings.theme, yes_label="Yes, quit",
+            detail="Your eyes will no longer control the computer until GazeOS is started again.",
+            avoid=global_rect(self.menu.buttons["menu_quit"])))
 
     def _shortcut_runner(self, name: str) -> Callable[[], None]:
         def run() -> None:
@@ -353,12 +378,18 @@ class GazeOSApp(QObject):
 
     def _show_menu(self) -> None:
         self.menu.show()
+        self.menu.touch()  # asked for again while open: count its idle time from now
 
     def _show_shortcuts(self) -> None:
         self.shortcuts.show()
+        self.shortcuts.touch()
 
     def _toggle_overlay(self) -> None:
+        """Hide or show the gaze cursor. The dwell ring stays either way, so this item can be
+        found and pressed again by gaze; its label says what a press will do."""
         self.overlay.show_cursor = not self.overlay.show_cursor
+        self.menu.buttons["menu_overlay"].setText(
+            "Hide gaze cursor" if self.overlay.show_cursor else "Show gaze cursor")
 
     def _toggle_debug(self) -> None:
         self.debug.setVisible(not self.debug.isVisible())
@@ -426,7 +457,8 @@ class GazeOSApp(QObject):
             self.sync.track("keyboard", self.keyboard)
 
     def _show_settings(self) -> None:
-        self._settings_dialog = SettingsDialog(self.settings, self._save_settings, self.settings.theme)
+        self._settings_dialog = SettingsDialog(self.settings, self._save_settings, self.settings.theme,
+                                               present=self._present_confirm)
         self.sync.track("settings", self._settings_dialog)
         self._settings_dialog.show()
 
@@ -448,7 +480,8 @@ class GazeOSApp(QObject):
             self.processor.apply_settings(settings)
 
     def _show_privacy(self) -> None:
-        self._privacy = PrivacyPanel(self.profile, self._data_deleted, self.settings.theme)
+        self._privacy = PrivacyPanel(self.profile, self._data_deleted, self.settings.theme,
+                                     present=self._present_confirm)
         self.sync.track("privacy", self._privacy)
         self._privacy.show()
 

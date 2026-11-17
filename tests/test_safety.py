@@ -242,3 +242,350 @@ def test_opening_the_keyboard_never_blocks_the_screen(qtbot, tmp_path) -> None:
             app.keyboard.close()
         for w in (app.overlay, app.action_bar, app.menu, app.shortcuts, app.debug):
             w.close()
+
+
+# -- stray glances: every GazeOS button is pressed by looking at it for the dwell time -----------
+
+
+@pytest.fixture
+def gaze_app(qtbot, tmp_path):
+    """The whole app in --simulate mode with a throwaway profile: no camera, no real input."""
+    pytest.importorskip("PySide6")
+    from types import SimpleNamespace
+
+    from gazeos.ui.app import GazeOSApp
+
+    app = GazeOSApp(SimpleNamespace(home=str(tmp_path), profile="t", simulate=True, dry_run=True,
+                                    gaze_model=None, camera=None))
+    yield app
+    app.worker.stop()
+    app.worker.join(2.0)
+    if hasattr(app, "_hotkeys"):
+        app._hotkeys.stop()
+    for w in (app.overlay, app.action_bar, app.menu, app.shortcuts, app.debug, app.keyboard, app._confirm_panel,
+              getattr(app, "_privacy", None), getattr(app, "_settings_dialog", None)):
+        if w is not None:
+            w.close()
+
+
+@pytest.fixture
+def quits(gaze_app, monkeypatch) -> list[int]:
+    """Records quitting instead of stopping the app (and the test's Qt application)."""
+    calls: list[int] = []
+    monkeypatch.setattr(gaze_app, "quit", lambda: calls.append(1))
+    return calls
+
+
+def test_quit_from_the_gaze_menu_needs_a_separate_yes(qtbot, gaze_app, quits) -> None:
+    """Quit asks in its own panel, whose Yes is well away from the Quit button; No is safe."""
+    from gazeos.ui.panels import MIN_YES_CLEARANCE_PX, global_rect
+
+    app = gaze_app
+    app._show_menu()
+    qtbot.waitUntil(app.menu.isVisible)
+    quit_btn = app.menu.buttons["menu_quit"]
+    asked_at = global_rect(quit_btn)
+    quit_btn.click()
+    panel = app._confirm_panel
+    assert panel is not None and panel.isVisible() and not app.menu.isVisible() and not quits
+    assert panel.yes_btn.text() == "Yes, quit"
+    assert panel.yes_clearance() >= MIN_YES_CLEARANCE_PX and not global_rect(panel.yes_btn).intersects(asked_at)
+    groups = {t.group for t in app.registry.all()}
+    assert "confirm" in groups and "menu" not in groups  # the hidden menu's buttons cannot be pressed
+    panel.no_btn.click()
+    assert not panel.isVisible() and not quits
+    app._show_menu()
+    quit_btn.click()
+    assert app._confirm_panel is not panel and not quits
+    app._confirm_panel.yes_btn.click()
+    assert quits == [1]
+
+
+def test_an_unanswered_question_is_no(qtbot, gaze_app, quits) -> None:
+    from gazeos.ui.panels import CONFIRM_TIMEOUT_S
+
+    app = gaze_app
+    app._show_menu()
+    qtbot.waitUntil(app.menu.isVisible)
+    app.menu.buttons["menu_quit"].click()
+    panel = app._confirm_panel
+    assert panel is not None and panel.idle_timer.isActive()
+    assert panel.idle_timer.interval() == CONFIRM_TIMEOUT_S * 1000 == 10000
+    panel.idle_timer.start(50)  # instead of waiting 10 s
+    qtbot.waitUntil(lambda: not panel.isVisible(), timeout=5000)
+    assert panel.answer is False and not quits
+    panel.yes_btn.click()  # a press that arrives after the timeout does nothing
+    assert not quits
+
+
+def test_one_long_stare_at_quit_cannot_quit(qtbot, gaze_app, quits) -> None:
+    """The stare that pressed Quit goes on for seconds, wandering over the button: it cannot
+    press Yes too (No sits under the eye and Yes is far off). Looking at Yes does quit."""
+    from PySide6.QtWidgets import QApplication
+
+    from gazeos.ui.panels import global_rect
+
+    app = gaze_app
+    app.worker.stop()  # the engine is fed from here, frame by frame
+    app.worker.join(2.0)
+    app.engine.apply_settings(app.settings)  # fresh dwell, filter and fixation state
+    app._show_menu()
+    qtbot.waitUntil(app.menu.isVisible)
+    app.sync.sync()
+    quit_target = next(t for t in app.registry.all() if t.key.startswith("menu:menu_quit:"))
+    clock = [time.monotonic()]  # the simulated frames so far carried monotonic times
+
+    def look(x: float, y: float, seconds: float) -> None:
+        for i in range(int(seconds * 30)):
+            clock[0] += 1 / 30
+            px = (x + 70 * np.sin(0.7 * i), y + 25 * np.cos(1.3 * i))  # restless, but on the button
+            app.engine.update(EngineInput(clock[0], _obs(px), OK))
+            QApplication.processEvents()  # a gaze press reaches its button through the bridge
+            app.sync.sync()  # as the 300 ms timer would
+
+    look(*quit_target.rect.center, 6.0)
+    assert not quits
+    panel = app._confirm_panel
+    assert panel is not None and not app.menu.isVisible()  # the stare did press Quit...
+    assert panel.isVisible() and panel.answer is None  # ...and nothing after it
+    yes = global_rect(panel.yes_btn).center()
+    look(yes.x(), yes.y(), 1.5)
+    assert quits == [1]
+
+
+def test_close_window_asks_with_yes_away_from_the_button(qtbot, gaze_app) -> None:
+    from gazeos.ui.panels import MIN_YES_CLEARANCE_PX, global_rect
+
+    app = gaze_app
+    app._show_shortcuts()
+    qtbot.waitUntil(app.shortcuts.isVisible)
+    button = app.shortcuts.buttons["sc_close_window"]
+    asked_at = global_rect(button)
+    button.click()
+    qtbot.waitUntil(lambda: app._confirm_panel is not None and app._confirm_panel.isVisible())
+    panel = app._confirm_panel
+    assert not app.backend.of_kind("hotkey")
+    assert panel.yes_clearance() >= MIN_YES_CLEARANCE_PX and not global_rect(panel.yes_btn).intersects(asked_at)
+    panel.yes_btn.click()
+    assert app.backend.of_kind("hotkey") == [("hotkey", "alt", "f4")]
+
+
+def test_delete_all_my_data_needs_the_separate_yes(qtbot, tmp_path) -> None:
+    """Pressing 'Delete all my data' twice no longer deletes: a separate panel asks, with Yes
+    away from the button; No (or no answer) brings the privacy panel back and keeps the data."""
+    pytest.importorskip("PySide6")
+    from gazeos.profiles.store import ProfileStore
+    from gazeos.ui.panels import MIN_YES_CLEARANCE_PX, ConfirmPanel, PrivacyPanel, global_rect
+
+    p = ProfileStore(tmp_path).create("A")
+    deleted: list[int] = []
+    asked: list[ConfirmPanel] = []
+
+    def present(panel: ConfirmPanel) -> None:
+        qtbot.addWidget(panel)
+        asked.append(panel)
+        panel.show()
+
+    privacy = PrivacyPanel(p, lambda: deleted.append(1), present=present)
+    qtbot.addWidget(privacy)
+    privacy.show()
+    asked_at = global_rect(privacy.delete_btn)
+    privacy.delete_btn.click()
+    privacy.delete_btn.click()  # the same spot again: the old scheme deleted here
+    assert p.path.exists() and len(asked) == 1 and not privacy.isVisible()
+    confirm = asked[0]
+    assert confirm.isVisible() and confirm.yes_btn.text() == "Yes, delete everything"
+    assert confirm.yes_clearance() >= MIN_YES_CLEARANCE_PX and not global_rect(confirm.yes_btn).intersects(asked_at)
+    confirm.no_btn.click()
+    assert privacy.isVisible() and p.path.exists() and not deleted
+    privacy.delete_btn.click()
+    asked[1].idle_timer.start(50)  # no answer
+    qtbot.waitUntil(lambda: not asked[1].isVisible(), timeout=5000)
+    assert privacy.isVisible() and p.path.exists() and not deleted
+    privacy.delete_btn.click()
+    asked[2].yes_btn.click()
+    assert not p.path.exists() and deleted == [1] and not privacy.isVisible()
+
+
+def test_idle_menus_and_panels_close_themselves(qtbot, gaze_app, settings) -> None:
+    """A panel opened by accident does not stay open: nothing pressed for a while closes it."""
+    from gazeos.ui.panels import ButtonPanel, PrivacyPanel
+    from gazeos.ui.settings_dialog import SettingsDialog
+
+    app = gaze_app
+    assert app.menu.idle_timer.interval() == 15000 and app.shortcuts.idle_timer.interval() == 15000
+    app._show_menu()
+    qtbot.waitUntil(app.menu.isVisible)
+    assert app.menu.idle_timer.isActive()
+    app.menu.idle_timer.start(50)
+    qtbot.waitUntil(lambda: not app.menu.isVisible(), timeout=5000)
+    assert PrivacyPanel(app.profile, lambda: None).idle_timer.interval() == 30000  # text to read
+    assert SettingsDialog(settings, lambda s: None).idle_timer.interval() == 60000  # unsaved edits
+
+    presses: list[int] = []
+    panel = ButtonPanel("T", [("A", "a", lambda: presses.append(1))], close_after=False, idle_s=0.6)
+    qtbot.addWidget(panel)
+    panel.show()
+    qtbot.wait(400)
+    panel.buttons["a"].click()  # a press starts the count again
+    assert presses == [1] and panel.isVisible() and panel.idle_timer.remainingTime() > 450
+    qtbot.waitUntil(lambda: not panel.isVisible(), timeout=5000)
+    panel.buttons["a"].click()  # left over from before it closed: ignored
+    assert presses == [1]
+
+
+def test_menu_items_can_be_undone_by_gaze(qtbot, gaze_app) -> None:
+    """Hide gaze cursor, Debug view and Pause each leave a way back that gaze alone can use."""
+    from PySide6.QtWidgets import QApplication
+
+    app = gaze_app
+    item = app.menu.buttons["menu_overlay"]
+    app._show_menu()
+    qtbot.waitUntil(app.menu.isVisible)
+    item.click()
+    assert not app.overlay.show_cursor and item.text() == "Show gaze cursor"
+    app._show_menu()
+    item.click()
+    assert app.overlay.show_cursor and item.text() == "Hide gaze cursor"
+
+    app._toggle_debug()
+    assert app.debug.isVisible()
+    app.sync.sync()
+    close = [t for t in app.registry.all() if t.key.startswith("debug:debug_close:")]
+    assert len(close) == 1
+    close[0].callback()  # what a dwell on it does
+    QApplication.processEvents()
+    assert not app.debug.isVisible()
+
+    app.toggle_pause()
+    assert app.engine.paused and app.overlay.toast is not None and "top-left corner" in app.overlay.toast[0]
+    app.toggle_pause()
+    assert not app.engine.paused
+
+
+def test_hidden_cursor_keeps_the_dwell_ring(qtbot) -> None:
+    pytest.importorskip("PySide6")
+    from gazeos.control.engine import EngineOutput
+    from gazeos.types import ControlState
+    from gazeos.ui.overlay import Overlay
+
+    ov = Overlay()
+    qtbot.addWidget(ov)
+    ov.show()
+    ov.resize(400, 300)
+    ov.show_cursor = False
+
+    def alpha(progress: float, x: int, y: int) -> int:
+        ov.set_output(EngineOutput(cursor=(200, 150), state=ControlState.DWELLING, status=TrackingStatus.TRACKING,
+                                   dwell_progress=progress, sigma_px=30.0))
+        return int(ov.grab().toImage().pixelColor(x, y).alpha())
+
+    assert alpha(0.5, 226, 150) > 0  # the ring, half full: its 3 o'clock point is drawn
+    assert alpha(0.5, 200, 150) == 0  # no cursor dot
+    assert alpha(0.0, 226, 150) == 0  # no dwell, no ring
+
+
+def _tab(tabs, title: str):
+    """The page of the settings tab called `title`."""
+    return tabs.widget(next(i for i in range(tabs.count()) if tabs.tabText(i) == title))
+
+
+def test_buttons_out_of_view_are_not_gaze_targets(qtbot, settings) -> None:
+    """Settings rows scrolled out of view were still gaze targets, some under Save: a dwell there
+    pressed a button nobody could see. Only what is visible is a target, and only while shown."""
+    pytest.importorskip("PySide6")
+    from PySide6.QtCore import QRect
+    from PySide6.QtWidgets import QPushButton, QScrollArea, QTabWidget
+
+    from gazeos.control.targets import TargetRegistry
+    from gazeos.ui.common import MainThreadBridge, TargetSync
+    from gazeos.ui.panels import global_rect
+    from gazeos.ui.settings_dialog import SettingsDialog
+
+    dlg = SettingsDialog(settings, lambda s: None)
+    qtbot.addWidget(dlg)
+    dlg.show()
+    tabs = dlg.findChild(QTabWidget)
+    scroll = _tab(tabs, "Cursor")  # 19 rows: more than fit
+    tabs.setCurrentWidget(scroll)
+    assert isinstance(scroll, QScrollArea)
+    view = global_rect(scroll.viewport())
+    hidden = {b.objectName() for b in scroll.findChildren(QPushButton)
+              if b.isVisible() and not view.intersects(global_rect(b))}
+    assert hidden  # some rows are out of view, so the test means something
+    reg = TargetRegistry()
+    sync = TargetSync(reg, MainThreadBridge())
+    sync.track("settings", dlg)
+    rows = [t for t in reg.all() if t.key.startswith("settings:set_")]
+    assert rows and all(view.contains(QRect(t.rect.left, t.rect.top, t.rect.width, t.rect.height)) for t in rows)
+    assert not {t.key.split(":")[1] for t in rows} & hidden
+    dlg.hide()
+    assert not reg.all()  # gone as soon as the window hides, not at the next sync
+
+
+def test_risky_settings_ask_before_saving(qtbot, settings) -> None:
+    """A stray dwell on Save keeps no change that can strand a person who uses only their eyes:
+    those ask in a separate panel (Yes away from Save); No brings the dialog back, edits kept."""
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QLabel, QPushButton, QTabWidget
+
+    from gazeos.ui.panels import ConfirmPanel
+    from gazeos.ui.settings_dialog import SettingsDialog
+
+    saved: list = []
+    asked: list[ConfirmPanel] = []
+
+    def present(panel: ConfirmPanel) -> None:
+        qtbot.addWidget(panel)
+        asked.append(panel)
+        panel.show()
+
+    dlg = SettingsDialog(settings, saved.append, present=present)
+    qtbot.addWidget(dlg)
+    dlg.show()
+    dlg.findChild(QPushButton, "set_layout").click()  # a harmless change saves at once
+    dlg.save_btn.click()
+    assert len(saved) == 1 and not asked
+
+    dlg = SettingsDialog(settings, saved.append, present=present)
+    qtbot.addWidget(dlg)
+    dlg.show()
+    _tab(dlg.findChild(QTabWidget), "Dwell").findChild(QPushButton, "set_enabled").click()  # dwell off
+    dlg.save_btn.click()
+    assert len(saved) == 1 and len(asked) == 1 and not dlg.isVisible()
+    assert any("Dwell clicking off" in label.text() for label in asked[0].findChildren(QLabel))
+    asked[0].no_btn.click()
+    assert dlg.isVisible() and len(saved) == 1 and not dlg.settings.dwell.enabled  # back, edit kept
+    dlg.save_btn.click()
+    asked[1].yes_btn.click()
+    assert len(saved) == 2 and not saved[1].dwell.enabled and not dlg.isVisible()
+
+
+def test_which_settings_changes_are_risky(settings) -> None:
+    from gazeos.settings import ControlMode
+    from gazeos.ui.settings_dialog import risky_changes
+
+    def changed(**edits) -> list[str]:
+        """`section__field=value`, or `field=value` for a top-level field."""
+        new = settings.model_copy(deep=True)
+        for path, value in edits.items():
+            section, _, name = path.partition("__")
+            if name:
+                setattr(getattr(new, section), name, value)
+            else:
+                setattr(new, section, value)
+        return risky_changes(settings, new)
+
+    assert not changed(theme="high_contrast")
+    assert not changed(dwell__dwell_ms=1000.0) and not changed(typing__layout="alphabetical")
+    for edit in ({"dwell__enabled": False}, {"mode": ControlMode.HYBRID}, {"dwell__dwell_ms": 2000.0},
+                 {"dwell__dwell_ms": 300.0}, {"camera__device_index": 1}, {"system__show_overlay": False},
+                 {"system__corner_size_px": 12}, {"system__confirm_destructive_shortcuts": False},
+                 {"system__auto_resume_after_face_lost": False}, {"calibration__auto_start_s": 0.0},
+                 {"gestures__enabled": True}):
+        assert len(changed(**edit)) == 1, edit
+    on = settings.model_copy(deep=True)
+    on.system.start_with_os = True
+    off = on.model_copy(deep=True)
+    off.system.start_with_os = False
+    assert risky_changes(on, off) and not risky_changes(off, on)

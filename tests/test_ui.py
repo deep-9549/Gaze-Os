@@ -108,6 +108,7 @@ def test_settings_dialog_edits_and_validates(qtbot, settings) -> None:
     saved: list[Settings] = []
     dlg = SettingsDialog(settings, saved.append)
     qtbot.addWidget(dlg)
+    dlg.show()
     inc = dlg.findChild(QPushButton, "set_dwell_ms_inc")
     toggle = dlg.findChild(QPushButton, "set_winks_enabled")
     cycle = dlg.findChild(QPushButton, "set_layout")
@@ -118,13 +119,14 @@ def test_settings_dialog_edits_and_validates(qtbot, settings) -> None:
     for _ in range(40):  # clamps at the schema maximum instead of crashing
         inc.click()
     dlg.findChild(QPushButton, "settings_save").click()
+    assert not saved and dlg.confirm is not None  # a 2 s dwell asks first (tests/test_safety.py)
+    qtbot.addWidget(dlg.confirm)
+    dlg.confirm.yes_btn.click()
     s = saved[0]
     assert 800 < s.dwell.dwell_ms <= 2000 and s.blink.winks_enabled and s.typing.layout == "alphabetical"
 
 
 def test_privacy_panel_deletes(qtbot, tmp_path) -> None:
-    from PySide6.QtWidgets import QPushButton
-
     from gazeos.profiles.store import ProfileStore
     from gazeos.ui.panels import PrivacyPanel
 
@@ -132,11 +134,12 @@ def test_privacy_panel_deletes(qtbot, tmp_path) -> None:
     deleted = []
     panel = PrivacyPanel(p, lambda: deleted.append(1))
     qtbot.addWidget(panel)
+    panel.show()
     assert "Settings" in panel.items.text()
-    btn = panel.findChild(QPushButton, "privacy_delete")
-    btn.click()
-    assert p.path.exists()  # first click only arms the confirmation
-    btn.click()
+    panel.delete_btn.click()
+    assert p.path.exists() and panel.confirm is not None  # asks in a separate panel (tests/test_safety.py)
+    qtbot.addWidget(panel.confirm)
+    panel.confirm.yes_btn.click()
     assert not p.path.exists() and deleted
 
 
