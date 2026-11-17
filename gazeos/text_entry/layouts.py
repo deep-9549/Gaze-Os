@@ -6,20 +6,24 @@ it so keys are at least 2.5x the user's measured error radius.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+import unicodedata
+from dataclasses import dataclass, replace
 
-SPECIAL_KEYS = ("space", "backspace", "speak", "phrases", "enter", "shift", "numbers", "close")
+SPECIAL_KEYS = ("space", "backspace", "speak", "phrases", "enter", "shift", "numbers", "symbols", "letters",
+                "close")
 
 
 @dataclass(frozen=True)
 class Key:
-    id: str  # "a", "space", "g:abc" (group), ...
+    id: str  # "a", "space", "g:abc" (group), "sym_commercial_at" (symbol), ...
     label: str
     x: float  # left, key units
     y: float  # top, key units
     w: float = 1.0
     h: float = 1.0
     letters: str = ""  # letters this key can produce (several for grouped keys)
+    text: str = ""  # a digit or symbol, typed exactly as it is: never shifted or decoded
 
     @property
     def center(self) -> tuple[float, float]:
@@ -58,7 +62,9 @@ class Layout:
 
 
 def _special_row(y: float, width: float) -> list[Key]:
-    specs = [("shift", "Shift", 1.5), ("numbers", "123", 1.5), ("space", "Space", width - 9.0),
+    # Space is never narrower than the other keys, and the row is scaled to the keyboard's
+    # width: the alphabetical layout is only 9 keys wide, which left Space 0 wide (invisible).
+    specs = [("shift", "Shift", 1.5), ("numbers", "123", 1.5), ("space", "Space", max(width - 9.0, 1.5)),
              ("backspace", "Del", 1.5), ("enter", "Enter", 1.5), ("speak", "Speak", 1.5),
              ("phrases", "Phrases", 1.5)]
     total = sum(w for _, _, w in specs)
@@ -114,6 +120,41 @@ LAYOUTS = {"qwerty": qwerty, "alphabetical": alphabetical, "large6": large6}
 
 def get_layout(name: str) -> Layout:
     return LAYOUTS[name]()
+
+
+# Digits and symbols, reached with "123": two pages of three rows of ten. The first holds what
+# URLs, e-mail addresses, dates and prices need; "#+=" opens the second, and between them every
+# printable ASCII character is there. The digits head both pages.
+SYMBOL_PAGES = (
+    ("1234567890", "@#$%&*-+=/", "():\"'_!,.?"),
+    ("1234567890", "[]{}<>\\|~^", "`;₹€£¥°•×÷"),
+)
+
+
+def _symbol_id(ch: str) -> str:
+    """'@' -> 'sym_commercial_at': plain ASCII, so button names and the CSV gaze trace stay intact."""
+    return "sym_" + re.sub(r"[^a-z0-9]+", "_", unicodedata.name(ch).lower())
+
+
+def symbols_layout(base: Layout, page: int = 0) -> Layout:
+    """A page of SYMBOL_PAGES in place of `base`'s letters, at `base`'s size so the keys do not
+    shrink. Every other key stays where it is, so Space, Del and Enter are where the eyes
+    expect them; "123" becomes "ABC" (back to the letters) and Shift switches the page."""
+    if not any(k.id == "numbers" for k in base.keys):
+        raise ValueError(f"layout {base.name!r} has no 123 key")
+    letter_keys = [k for k in base.keys if k.letters]
+    x0, y0 = min(k.x for k in letter_keys), min(k.y for k in letter_keys)
+    rows = SYMBOL_PAGES[page]
+    w = (max(k.x + k.w for k in letter_keys) - x0) / max(len(r) for r in rows)
+    h = (max(k.y + k.h for k in letter_keys) - y0) / len(rows)
+    keys = [Key(_symbol_id(ch), ch, x0 + col * w, y0 + row * h, w, h, text=ch)
+            for row, chars in enumerate(rows) for col, ch in enumerate(chars)]
+    swap = {"numbers": ("letters", "ABC"), "shift": ("numbers", "123") if page else ("symbols", "#+=")}
+    for k in base.keys:
+        if not k.letters:
+            kid, label = swap.get(k.id, (k.id, k.label))
+            keys.append(replace(k, id=kid, label=label))
+    return Layout(f"{base.name}-{'#+=' if page else '123'}", tuple(keys), base.width, base.height)
 
 
 def key_unit_px(error_radius_px: float, multiple: float = 2.5, min_px: float = 48.0) -> float:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import string
 import time
 
 import numpy as np
@@ -98,6 +99,57 @@ def test_keyboard_types_through_gaze_targets(qtbot, predictor) -> None:
     qtbot.waitUntil(lambda: session.current_word == "hi", timeout=2000)
     assert "".join(typed) == "hi"
     assert kb.pred_buttons[0].text() != ""
+
+
+@pytest.mark.parametrize("layout_name", ["qwerty", "alphabetical"])
+def test_keyboard_123_types_digits_and_symbols(qtbot, predictor, layout_name) -> None:
+    """By gaze alone: 123 swaps the letters for digits and symbols at the same key size, with
+    Space, Del and Enter where they were and ABC where 123 was; symbols type literally; #+=
+    opens the second page; ABC brings the letters back."""
+    from gazeos.ui.common import MainThreadBridge, TargetSync
+    from gazeos.ui.keyboard import KeyboardWindow
+
+    typed: list[str] = []
+    session = TypingSession(get_layout(layout_name), predictor, emit=typed.append)
+    kb = KeyboardWindow(session, PhraseBank(), SilentSpeaker(), 40.0, lambda: None)
+    qtbot.addWidget(kb)
+    kb.show()
+    reg = TargetRegistry()
+    sync = TargetSync(reg, MainThreadBridge())
+    sync.track("keyboard", kb)
+
+    def look_at(label: str) -> None:
+        """What the engine does when a dwell lands on the key showing `label`."""
+        sync.sync()  # the app re-reads the buttons every 300 ms
+        button = next(b for b in kb.key_buttons.values() if b.text().replace("&&", "&") == label)
+        target = next(t for t in reg.all() if t.key.split(":")[1] == button.objectName())
+        with qtbot.waitSignal(button.clicked, timeout=2000):
+            target.callback()
+
+    letters = set(string.ascii_lowercase)
+    unit = kb.unit
+    in_place = {kid: kb.key_buttons[kid].geometry() for kid in ("space", "backspace", "enter")}
+    assert all(g.width() > 0 and g.height() > 0 for g in in_place.values())  # alphabetical's Space was 0 wide
+    numbers_key = kb.key_buttons["numbers"].geometry()
+
+    look_at("123")
+    assert kb.current_layout.name == f"{layout_name}-123"
+    assert {"1", "0", "@"} <= {b.text() for b in kb.key_buttons.values()} and not letters & set(kb.key_buttons)
+    assert kb.unit == unit  # the keys did not shrink
+    assert {kid: kb.key_buttons[kid].geometry() for kid in in_place} == in_place
+    assert kb.key_buttons["letters"].text() == "ABC" and kb.key_buttons["letters"].geometry() == numbers_key
+    for label in ("7", "@", "/", "&"):
+        look_at(label)
+    assert session.text == "7@/&"
+    for label in ("Space", "Del", "Enter"):
+        look_at(label)
+    assert session.text == "7@/&\n"
+    for label in ("#+=", "\\", "123", "ABC"):
+        look_at(label)
+    assert kb.current_layout is session.layout  # the letters the user came from
+    assert letters <= set(kb.key_buttons) and "1" not in {b.text() for b in kb.key_buttons.values()}
+    look_at("A")
+    assert session.text == "7@/&\n\\a" and "".join(typed) == "7@/& \\a"  # each once; Del and Enter are keys
 
 
 def test_settings_dialog_edits_and_validates(qtbot, settings) -> None:
