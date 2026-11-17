@@ -353,23 +353,27 @@ def gaze_app(qtbot, tmp_path):
                 app.engine.update(EngineInput(clock[0], _obs((cx, cy)), OK))
             qtbot.wait(50)  # let the queued button presses run on the GUI thread
 
-        look("keyboard:key_h:", 1.0)
-        look("keyboard:key_i:", 1.0)
-        look("keyboard:key_l:", 2.4)  # held: typed twice
+        # Each look lasts long enough for the 0.5 s cooldown after the previous press plus the
+        # 0.8 s dwell; the held L presses again after a further 0.7 + 0.8 s.
+        look("keyboard:key_h:", 1.5)
+        look("keyboard:key_i:", 1.5)
+        look("keyboard:key_l:", 3.0)  # held: typed twice
         assert app.keyboard is not None
         assert app.keyboard.session.text == "hill"
-        look("keyboard:key_numbers:", 1.0)
+        look("keyboard:key_numbers:", 1.5)
         qtbot.wait(100)
-        look("keyboard:key_sym_digit_seven:", 1.0)
-        look("keyboard:key_letters:", 1.0)
+        look("keyboard:key_sym_digit_seven:", 1.5)
+        look("keyboard:key_letters:", 1.5)
         qtbot.wait(100)
         assert app.keyboard.session.text == "hill7"
         assert any(t.key.startswith("keyboard:key_a:") for t in (app.sync.sync() or app.registry.all()))
         app.engine.set_paused(True)
         look("keyboard:key_a:", 1.5)  # paused: keys do nothing
         assert app.keyboard.session.text == "hill7" and app.engine.paused
-        look("action_bar:pause:", 1.2)  # Pause resumes
+        look("action_bar:pause:", 1.5)  # Pause resumes
         assert not app.engine.paused
+        look("action_bar:pause:", 2.0)  # and staring on does not pause again at once
+        assert app.engine.paused is False
     finally:
         if app.keyboard is not None:
             app.keyboard.close()
