@@ -725,7 +725,11 @@ def test_enter_needs_a_longer_look(settings, geometry) -> None:
     assert pressed == []  # 1.0 s on Enter: not yet (1.2 s needed)
     t = _feed(eng, t, 0.3)
     assert pressed == ["enter"]
-    for _ in range(27):  # 0.9 s on A: the normal 0.8 s dwell
+    for _ in range(36):  # 1.2 s on A: under Enter's 1.2 s + the 0.5 s cooldown after any press
+        t += 1 / 30
+        eng.update(EngineInput(t, _obs((1050.0, 500.0)), OK))
+    assert pressed == ["enter"]
+    for _ in range(9):  # by 1.5 s: the normal 0.8 s dwell after the cooldown
         t += 1 / 30
         eng.update(EngineInput(t, _obs((1050.0, 500.0)), OK))
     assert pressed == ["enter", "a"]
@@ -750,3 +754,55 @@ def test_a_poor_recalibration_does_not_replace_a_saved_one(qtbot, geometry) -> N
         is_accept = getattr(win._auto_step, "__name__", "") == "_accept"
         assert is_accept == (expected == "accept"), keep_previous
         win._disarm()
+
+
+def test_staring_at_pause_does_not_flip_it_back(settings, geometry) -> None:
+    """Pause pressed by a dwell pauses; the same stare must not resume (it used to flip every
+    0.8 s). Looking away and back at Pause resumes; staring on stays resumed."""
+    from gazeos.control.targets import GazeTarget, TargetRegistry
+    from gazeos.types import Rect
+
+    reg = TargetRegistry()
+    eng, _ = _engine(settings, geometry)
+    reg.register(GazeTarget("action_bar:pause:1", Rect(1756, 787, 155, 90), lambda: eng.toggle_pause(), "action_bar"))
+    eng.registry = reg
+    pause, away = (1830.0, 830.0), (900.0, 500.0)
+
+    def look(point, seconds, t):  # type: ignore[no-untyped-def]
+        for _ in range(int(round(seconds * 30))):
+            t += 1 / 30
+            eng.update(EngineInput(t, _obs(point), OK))
+        return t
+
+    t = look(pause, 1.0, 0.0)
+    assert eng.paused
+    t = look(pause, 3.0, t)  # keeps staring: stays paused
+    assert eng.paused
+    t = look(away, 0.5, t)
+    t = look(pause, 1.0, t)  # back to Pause: resumes
+    assert not eng.paused
+    look(pause, 3.0, t)  # keeps staring: stays resumed
+    assert not eng.paused
+
+
+def test_a_dwell_spot_fires_again_only_after_the_gaze_left_it() -> None:
+    from gazeos.control.dwell import DwellClicker
+
+    d = DwellClicker(dwell_ms=800, radius_px=50, cooldown_ms=500)
+    spot, other = np.array([500.0, 400.0]), np.array([800.0, 400.0])
+    fires = 0
+    t = 0.0
+    for _ in range(30):  # 1 s: fires once
+        t += 1 / 30
+        fires += d.update(t, spot).fired
+    d.reset()  # e.g. a pause or a resume
+    for _ in range(90):  # 3 s more on the same spot: not again
+        t += 1 / 30
+        fires += d.update(t, spot).fired
+    assert fires == 1
+    t += 1 / 30
+    d.update(t, other)  # looked away
+    for _ in range(30):
+        t += 1 / 30
+        fires += d.update(t, spot).fired
+    assert fires == 2

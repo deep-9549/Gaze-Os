@@ -323,6 +323,7 @@ class ControlEngine:
                     events.append(f"target:{target.key}")
             else:
                 self.dwell.reset()
+                self.dwell.forget_if_left(cursor)  # looked away from Pause: it may be pressed again
         # Rest reminder every N minutes (PRD 7.7).
         period = self.s.system.rest_reminder_min * 60.0
         if period > 0 and t - self._start_t - self._last_rest_reminder >= period:
