@@ -273,3 +273,23 @@ def test_a_long_lid_gap_starts_the_dwell_again(settings, geometry) -> None:
     assert not be.of_kind("click")  # no click on the frames right after the gap
     _feed(eng, t, 0.6)  # a fresh full dwell does click
     assert be.of_kind("click") == [("click", "left", 1)]
+
+
+def test_while_paused_only_the_pause_button_responds(settings, geometry) -> None:
+    """A user without hands resumes by looking at Pause; nothing else is pressed or clicked."""
+    from gazeos.control.targets import GazeTarget, TargetRegistry
+    from gazeos.types import Rect
+
+    pressed: list[str] = []
+    reg = TargetRegistry()
+    reg.register(GazeTarget("keyboard:key_a:1", Rect(650, 450, 100, 100), lambda: pressed.append("a"), "keyboard"))
+    reg.register(GazeTarget("action_bar:pause:2", Rect(1756, 787, 155, 90), lambda: pressed.append("pause"), "action_bar"))
+    eng, be = _engine(settings, geometry)
+    eng.registry = reg
+    eng.set_paused(True)
+    t = _feed(eng, 0.0, 2.0)  # 2 s on key A (POINT is inside it)
+    assert pressed == [] and not be.of_kind("click")
+    for _ in range(36):  # 1.2 s on Pause
+        t += 1 / 30
+        eng.update(EngineInput(t, _obs((1830.0, 830.0)), OK))
+    assert pressed == ["pause"] and not be.of_kind("click") and not be.of_kind("move")

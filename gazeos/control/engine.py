@@ -83,6 +83,8 @@ class ControlEngine:
     # frames (18 Nov 2026 traces).
     MAX_DWELL_GAP_S = 0.6
     MAX_LID_GAP_S = 1.5
+    # GazeOS buttons that still respond while paused (registry keys start with these).
+    RESUME_TARGETS = ("action_bar:pause:", "menu:menu_pause:")
 
     def __init__(
         self,
@@ -294,6 +296,19 @@ class ControlEngine:
                     events.append(self._fire(upd.anchor, t, source="dwell"))
             elif point is None:
                 state = self.dwell.state
+        elif self.paused and cursor is not None and point is not None:
+            # While paused only the Pause buttons respond, so a user without hands can resume
+            # by looking at Pause where they paused (the top-left corner works too). Nothing
+            # else is pressed, clicked or typed.
+            target = self.registry.hit(float(cursor[0]), float(cursor[1]))
+            if target is not None and target.key.startswith(self.RESUME_TARGETS):
+                upd = self.dwell.update(t, np.asarray(target.rect.center, dtype=np.float64))
+                progress = upd.progress
+                if upd.fired:
+                    self._invoke_target(target, t)
+                    events.append(f"target:{target.key}")
+            else:
+                self.dwell.reset()
         # Rest reminder every N minutes (PRD 7.7).
         period = self.s.system.rest_reminder_min * 60.0
         if period > 0 and t - self._start_t - self._last_rest_reminder >= period:
