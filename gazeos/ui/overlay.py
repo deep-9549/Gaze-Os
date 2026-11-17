@@ -117,7 +117,8 @@ class Overlay(QWidget):
                 painter.drawEllipse(c, 4.0, 4.0)
             # The ring stays when the cursor is hidden: it is the warning that a look is about to
             # press something, and the way to find "Show gaze cursor" again by gaze.
-            if out.dwell_progress > 0 and not out.paused:
+            # While paused only Pause itself reports progress: its ring shows the look is working.
+            if out.dwell_progress > 0:
                 ring = 26.0
                 pen = QPen(color(th, "ring"), 6)
                 pen.setCapStyle(Qt.PenCapStyle.RoundCap)
