@@ -293,3 +293,28 @@ def test_while_paused_only_the_pause_button_responds(settings, geometry) -> None
         t += 1 / 30
         eng.update(EngineInput(t, _obs((1830.0, 830.0)), OK))
     assert pressed == ["pause"] and not be.of_kind("click") and not be.of_kind("move")
+
+
+def test_keep_looking_at_a_typing_key_to_type_it_again(settings, geometry) -> None:
+    """The second l of "hello" without looking away; other GazeOS buttons press once."""
+    from gazeos.control.targets import GazeTarget, TargetRegistry
+    from gazeos.types import Rect
+
+    pressed: list[str] = []
+    reg = TargetRegistry()
+    reg.register(GazeTarget("keyboard:key_l:1", Rect(650, 450, 100, 100), lambda: pressed.append("l"),
+                            "keyboard", repeat=True))
+    reg.register(GazeTarget("action_bar:pause:2", Rect(1756, 787, 155, 90), lambda: pressed.append("pause"),
+                            "action_bar"))
+    eng, _ = _engine(settings, geometry)
+    eng.registry = reg
+    t = _feed(eng, 0.0, 1.2)
+    assert pressed == ["l"]  # once at 0.8 s; not again yet
+    t = _feed(eng, t, 0.9)
+    assert pressed == ["l"]  # still once at 2.1 s
+    t = _feed(eng, t, 0.3)
+    assert pressed == ["l", "l"]  # again at 0.8 + 0.7 + 0.8 = 2.3 s
+    for _ in range(90):  # 3 s on Pause: pressed once only
+        t += 1 / 30
+        eng.update(EngineInput(t, _obs((1830.0, 830.0)), OK))
+    assert pressed == ["l", "l", "pause"]

@@ -21,6 +21,8 @@ class GazeTarget:
     callback: Callable[[], None]
     group: str = ""
     dwell_ms: float | None = None  # per-target dwell override
+    # Pressed again while the gaze stays on it (typing keys: the second l of "hello", holding Del).
+    repeat: bool = False
 
 
 class TargetRegistry:

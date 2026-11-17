@@ -552,7 +552,7 @@ class GazeOSApp(QObject):
             target_px=np.stack([s.target_px for s in outcome.samples]),
         )
         if self.keyboard is not None:
-            self.keyboard.build(self.keyboard.session.layout, self.engine.error_px)
+            self.keyboard.build(self.keyboard.current_layout, self.engine.error_px)  # stay on the page shown
 
     def _on_refit(self, personalizer: Personalizer) -> None:
         self.bridge.call.emit(lambda: personalizer.save(self.profile.calibration_file))

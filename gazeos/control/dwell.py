@@ -46,6 +46,12 @@ class DwellClicker:
         (used when the magnifier opens right where the last dwell fired)."""
         self._fired_point = None
 
+    def restart(self) -> None:
+        """Start a new dwell where the gaze is, even on the spot that just fired (key repeat)."""
+        self.state = ControlState.IDLE
+        self._anchor = None
+        self._fired_point = None
+
     def hold(self, seconds: float) -> None:
         """Do not count `seconds` toward the dwell (no valid gaze sample arrived in that time)."""
         self._start += seconds

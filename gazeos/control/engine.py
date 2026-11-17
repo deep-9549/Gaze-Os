@@ -85,6 +85,10 @@ class ControlEngine:
     MAX_LID_GAP_S = 1.5
     # GazeOS buttons that still respond while paused (registry keys start with these).
     RESUME_TARGETS = ("action_bar:pause:", "menu:menu_pause:")
+    # A repeatable GazeOS target (typing keys) fires again when the gaze stays on it this long
+    # after it fired, plus a full dwell: 0.7 + 0.8 = 1.5 s. On 18 Nov the gaze left a key a
+    # median 0.3 s after it fired, and stayed over 1.5 s once in 90 presses (on Del).
+    REPEAT_AFTER_S = 0.7
 
     def __init__(
         self,
@@ -111,6 +115,8 @@ class ControlEngine:
         self._prev_t: float | None = None  # time of the previous frame of any kind
         self._lost_run = 0.0  # seconds without a sample because tracking was lost or the eyes closed
         self._lid_run = 0.0  # seconds without a sample because the lid gate dropped it
+        self._repeat_key: str | None = None  # the GazeOS target that fired last, and when
+        self._repeat_t = 0.0
         self._build(settings)
         self.action = Action.LEFT
         self.dragging = False
@@ -290,7 +296,13 @@ class ControlEngine:
             # Dwell.
             dwell_enabled = self.s.dwell.enabled and self.s.mode != ControlMode.HYBRID
             if point is not None and dwell_enabled and not self._in_scroll_zone(cursor):
-                upd = self.dwell.update(t, self._dwell_point(cursor))
+                dwell_point = self._dwell_point(cursor)
+                tgt = self._dwell_target
+                if (tgt is not None and tgt.repeat and tgt.key == self._repeat_key
+                        and self.dwell.state in (ControlState.FIRED, ControlState.COOLDOWN)
+                        and t - self._repeat_t >= self.REPEAT_AFTER_S):
+                    self.dwell.restart()  # still on the key that just fired: type it again
+                upd = self.dwell.update(t, dwell_point)
                 state, progress = upd.state, upd.progress
                 if upd.fired and upd.anchor is not None:
                     events.append(self._fire(upd.anchor, t, source="dwell"))
@@ -538,6 +550,7 @@ class ControlEngine:
         return f"{source}:{action.value}"
 
     def _invoke_target(self, target: GazeTarget, t: float) -> None:
+        self._repeat_key, self._repeat_t = target.key, t
         try:
             target.callback()
         except Exception:

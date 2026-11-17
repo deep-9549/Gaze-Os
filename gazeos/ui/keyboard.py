@@ -96,6 +96,8 @@ class KeyboardWindow(QWidget):
         for key in layout.keys:
             b = QPushButton(key.label.replace("&", "&&"), self.keys_host)  # a lone & marks a shortcut
             b.setObjectName(f"key_{key.id}")
+            if key.letters or key.text or key.id in ("space", "backspace"):
+                b.setProperty("gaze_repeat", True)  # keep looking to type it again
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             b.setGeometry(int(key.x * unit) + 2, int(key.y * unit) + 2, int(key.w * unit) - 4, int(key.h * unit) - 4)
             b.clicked.connect(lambda _=False, k=key: self._press(k))

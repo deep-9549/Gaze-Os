@@ -205,4 +205,5 @@ class TargetSync(QObject):
                 top_left = btn.mapToGlobal(QPoint(0, 0))
                 rect = to_physical(QRect(top_left, btn.size()), ratio)
                 key = f"{group}:{btn.objectName() or i}:{id(btn)}"
-                self.registry.register(GazeTarget(key, rect, self.bridge.later(btn.click), group))
+                self.registry.register(GazeTarget(key, rect, self.bridge.later(btn.click), group,
+                                                  repeat=bool(btn.property("gaze_repeat"))))
