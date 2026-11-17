@@ -1,7 +1,8 @@
 """Warn when the head has moved away from where the calibration was made.
 
 A calibration maps gaze to the screen for one head position. On 18 Nov 2026 the user
-calibrated, then moved about 19 cm closer to type, and the cursor landed about 5 cm off
+calibrated, then moved about 13 cm closer to type (19 cm in the app's own units, which
+overstate distance with the default focal length), and the cursor landed about 5 cm off
 (two keys); fitting at one distance and testing at the other cost 5-17 mm on its own. The
 app sees the head position on every frame, so it can say so instead of failing silently.
 
