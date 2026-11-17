@@ -211,3 +211,34 @@ def test_calibration_without_eye_data_retries_then_closes_by_itself(qtbot, geome
     win.show()
     qtbot.waitUntil(lambda: bool(outcomes), timeout=30000)
     assert outcomes == [None] and win._auto_redos == 1
+
+
+def test_opening_the_keyboard_never_blocks_the_screen(qtbot, tmp_path) -> None:
+    """The word predictor (about 3.5 s with the trained 3-gram) loads in the background from
+    startup; a Keyboard press before it is ready returns at once and opens the keyboard when
+    it is (18 Nov 2026: the screen froze on every first open)."""
+    pytest.importorskip("PySide6")
+    from types import SimpleNamespace
+
+    from gazeos.ui.app import GazeOSApp
+
+    app = GazeOSApp(SimpleNamespace(home=str(tmp_path), profile="t", simulate=True, dry_run=True,
+                                    gaze_model=None, camera=None))
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+
+        slow = ThreadPoolExecutor(max_workers=1)  # still loading when Keyboard is pressed
+        app._predictor = slow.submit(lambda: (time.sleep(1.0), app._build_predictor())[1])
+        slow.shutdown(wait=False)
+        t0 = time.perf_counter()
+        app.toggle_keyboard()
+        app.toggle_keyboard()  # a second press while loading changes nothing
+        assert time.perf_counter() - t0 < 0.5
+        qtbot.waitUntil(lambda: app.keyboard is not None and app.keyboard.isVisible(), timeout=30000)
+    finally:
+        app.worker.stop()
+        app.worker.join(2.0)
+        if app.keyboard is not None:
+            app.keyboard.close()
+        for w in (app.overlay, app.action_bar, app.menu, app.shortcuts, app.debug):
+            w.close()

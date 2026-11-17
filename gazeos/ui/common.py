@@ -19,9 +19,11 @@ THEMES: dict[str, dict[str, str]] = {
         "bg": "#1E1F24", "panel": "#2A2C33", "fg": "#F2F3F5", "muted": "#B8BCC6",
         "accent": "#4DA3FF", "accent_fg": "#0B1220", "ok": "#3FCF8E", "warn": "#FFC24D",
         "bad": "#FF6B6B", "ring": "#4DA3FF", "cursor": "#4DA3FF",
-        # Calibration runs on a light surface: in a dim room a dark screen leaves the face
-        # unlit, and the eye crops get dark and noisy (ADR 0006, 27 Oct 2026 recordings).
-        "calib_bg": "#C9CBD1", "calib_fg": "#1E1F24", "calib_dot": "#0B4F9C", "calib_check": "#0E6B43",
+        # Calibration runs on the same dark surface as the keyboard: the screen lights the face,
+        # and a fit made under a light screen was 6 mm worse on the dark keyboard than one made
+        # under a dark screen (18 Nov 2026 captures, 12 against 18 mm). Overrides ADR 0006's
+        # light surface, chosen before the keyboard was in daily use.
+        "calib_bg": "#2A2C33", "calib_fg": "#F2F3F5", "calib_dot": "#4DA3FF", "calib_check": "#3FCF8E",
     },
     "high_contrast": {
         "bg": "#000000", "panel": "#000000", "fg": "#FFFFFF", "muted": "#FFFFFF",

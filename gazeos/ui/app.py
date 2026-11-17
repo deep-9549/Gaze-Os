@@ -142,6 +142,7 @@ class GazeOSApp(QObject):
         self.logger = ExperimentLogger(self.profile.logs_dir) if self.settings.privacy.experiment_logging else None
         self.heatmap = (HeatmapRecorder(self.geometry.width_px, self.geometry.height_px)
                         if self.settings.privacy.heatmaps else None)
+        self._start_predictor_loading()
         self._build_ui()
         self._start_threads()
         self._install_hotkeys()
@@ -362,19 +363,54 @@ class GazeOSApp(QObject):
     def _toggle_debug(self) -> None:
         self.debug.setVisible(not self.debug.isVisible())
 
+    def _build_predictor(self) -> Predictor:
+        """The word predictor. Loading the trained 3-gram takes about 3.5 s, so it runs on a
+        background thread from startup; on the UI thread it froze the screen when the keyboard
+        first opened (18 Nov 2026)."""
+        predictor = Predictor.default(
+            get_layout(self.settings.typing.layout), self.settings.typing.num_predictions,
+            ngram_path=Path("models/ngram_en.json"),
+            transformer_path=Path("models/lm_small.onnx") if self.settings.typing.use_transformer else None,
+        )
+        if self.settings.typing.use_llm:
+            predictor.llm = LocalLLM(self.settings.typing.llm_model)
+        if self.profile.dictionary_file.exists():
+            for line in self.profile.dictionary_file.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    predictor.trie.add(line.strip(), 5.0)
+        return predictor
+
+    def _start_predictor_loading(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gazeos-predictor")
+        self._predictor = pool.submit(self._build_predictor)
+        pool.shutdown(wait=False)
+        self._keyboard_waiting = False
+
+    def _open_keyboard_when_ready(self) -> None:
+        if not self._predictor.done():
+            QTimer.singleShot(200, self._open_keyboard_when_ready)
+            return
+        self._keyboard_waiting = False
+        self.toggle_keyboard()
+
     def toggle_keyboard(self) -> None:
         if self.keyboard is None:
+            if not self._predictor.done():
+                # Still loading: say so and open as soon as it is ready, instead of blocking
+                # the screen. Pressing Keyboard again meanwhile changes nothing.
+                if not self._keyboard_waiting:
+                    self._keyboard_waiting = True
+                    self.overlay.show_toast("Keyboard loading...", 2)
+                    QTimer.singleShot(200, self._open_keyboard_when_ready)
+                return
             layout = get_layout(self.settings.typing.layout)
-            predictor = Predictor.default(
-                layout, self.settings.typing.num_predictions, ngram_path=Path("models/ngram_en.json"),
-                transformer_path=Path("models/lm_small.onnx") if self.settings.typing.use_transformer else None,
-            )
-            if self.settings.typing.use_llm:
-                predictor.llm = LocalLLM(self.settings.typing.llm_model)
-            if self.profile.dictionary_file.exists():
-                for line in self.profile.dictionary_file.read_text(encoding="utf-8").splitlines():
-                    if line.strip():
-                        predictor.trie.add(line.strip(), 5.0)
+            try:
+                predictor = self._predictor.result()
+            except Exception:
+                log.exception("word predictor failed to load; using the built-in word list")
+                predictor = Predictor.default(layout, self.settings.typing.num_predictions)
             session = TypingSession(layout, predictor, emit=self.engine.type_text,
                                     emit_key=lambda k: None if self.engine.paused else self.backend.hotkey(k))
             self.keyboard = KeyboardWindow(

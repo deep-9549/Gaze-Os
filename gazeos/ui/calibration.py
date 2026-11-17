@@ -306,7 +306,7 @@ class CalibrationWindow(QWidget):
     def paintEvent(self, event: object) -> None:  # noqa: N802
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        light = self.phase in ("intro", "calibrate", "validate")  # light surface lights the face
+        light = self.phase in ("intro", "calibrate", "validate")  # the calibration surface (theme calib_*)
         bg_key = "calib_bg" if light else "bg"
         p.fillRect(self.rect(), color(self.theme_name, bg_key))
         ratio = device_ratio(self)

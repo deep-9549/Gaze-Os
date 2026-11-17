@@ -55,6 +55,8 @@ class FrameResult:
     status: str = TrackingStatus.TRACKING.value
     eye_closed: bool = False
     features: FloatArray | None = None  # penultimate gaze features, for P4
+    lid_down: bool = False  # the lid gate dropped this frame's gaze sample
+    blink_score: float = 0.0
 
 
 @dataclass(frozen=True)

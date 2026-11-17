@@ -221,6 +221,8 @@ class FrameProcessor:
         res.quality_ok = q.ok
         res.eye_closed = state.both_closed
         res.timings_ms.update(timings)
+        res.lid_down = lid_down
+        res.blink_score = blink_score
         if lid_down:  # recorded in res for analysis, but neither cursor nor calibration use it
             obs = None
         inp = EngineInput(t, obs, q, blink_event=blink_event, gesture_event=gesture_event,
@@ -251,6 +253,35 @@ class ProcessingThread(threading.Thread):
         self.fps = 0.0
         self._lock = threading.Lock()
         self.stalled = False
+        # GAZEOS_TRACE=path.csv: one line per frame with every stage of the cursor, for
+        # finding where a screen area becomes unreachable (fable_opinion.md 4.7).
+        import os
+
+        self._trace = None
+        if os.environ.get("GAZEOS_TRACE"):
+            self._trace = open(os.environ["GAZEOS_TRACE"], "w", buffering=1)  # noqa: SIM115
+            self._trace.write("t,status,quality_ok,lid_down,blink,raw_x,raw_y,cal_x,cal_y,cursor_x,cursor_y,state,dwell_key,paused\n")
+            self._trace_targets_t = 0.0
+
+    def _write_trace(self, pf: ProcessedFrame, out: EngineOutput | None) -> None:
+        r, o, eng = pf.result, pf.engine_input.obs, self.engine
+        raw = cal = (float("nan"), float("nan"))
+        if o is not None and eng is not None:
+            raw = (float(o.screen_px[0]), float(o.screen_px[1]))
+            c = eng.drift.apply(eng.personalizer.predict_px(o))
+            cal = (float(c[0]), float(c[1]))
+        cur = out.cursor if out is not None and out.cursor is not None else (float("nan"), float("nan"))
+        key = eng._dwell_target.key if eng is not None and eng._dwell_target is not None else ""
+        assert self._trace is not None
+        self._trace.write(f"{r.t_capture:.4f},{r.status},{int(r.quality_ok)},{int(getattr(r, 'lid_down', False))},"
+                          f"{getattr(r, 'blink_score', 0.0):.3f},{raw[0]:.1f},{raw[1]:.1f},{cal[0]:.1f},{cal[1]:.1f},"
+                          f"{cur[0]},{cur[1]},{out.state.value if out else ''},{key},{int(out.paused) if out else ''}\n")
+        if eng is not None and r.t_capture - self._trace_targets_t > 2.0:  # where GazeOS's own buttons are
+            self._trace_targets_t = r.t_capture
+            import json
+
+            with open(self._trace.name + ".targets.json", "w") as fh:
+                json.dump({t.key: [t.rect.left, t.rect.top, t.rect.width, t.rect.height] for t in eng.registry.all()}, fh)
 
     # No frame for this long, or this many frames failing in a row: stop acting.
     STALL_S = 1.0
@@ -292,6 +323,8 @@ class ProcessingThread(threading.Thread):
                 if out is not None:
                     pf.result.screen_xy = out.cursor
                     pf.result.state = out.state.value
+                if self._trace is not None:
+                    self._write_trace(pf, out)
                 if self.on_frame is not None:
                     self.on_frame(pf, out, frame.image_rgb)
                 failures = 0
