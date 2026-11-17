@@ -352,7 +352,8 @@ class GazeOSApp(QObject):
     def emergency_stop(self) -> None:
         with self.worker.with_engine():
             self.engine.emergency_stop()
-        self.overlay.show_toast("Emergency stop: all input stopped. Ctrl+Alt+P resumes.", 6)
+        self.overlay.show_toast("Emergency stop: all input stopped. To resume, look at Pause on the right-hand bar, "
+                                "or press Ctrl+Alt+P.", 6)
 
     def _confirm_destructive(self, name: str) -> bool:
         """Called from the engine thread: ask on the GUI thread, run the shortcut on Yes."""
