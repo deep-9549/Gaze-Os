@@ -71,3 +71,30 @@ class QualityGate:
                 hold_cursor=True,
             )
         return low or QualityReport(ok=True, status=TrackingStatus.TRACKING)
+
+
+class LidDropMonitor:
+    """Says when the lid gate drops most frames for a while: the eyelids hide the eyes when
+    the user looks down, usually because the screen sits low against their eyes. On 18 Nov
+    2026 it dropped 73-78% of the frames on the lower keyboard rows in one sitting, and the
+    cursor felt sluggish there for no visible reason."""
+
+    def __init__(self, window_s: float = 10.0, rate: float = 0.5, repeat_s: float = 300.0) -> None:
+        self.window_s, self.rate, self.repeat_s = window_s, rate, repeat_s
+        self._frames: list[tuple[float, bool]] = []
+        self._last_warning = -1e9
+
+    def update(self, t: float, lid_down: bool, tracking: bool) -> str | None:
+        if not tracking:
+            self._frames.clear()
+            return None
+        self._frames.append((t, lid_down))
+        while self._frames and self._frames[0][0] < t - self.window_s:
+            self._frames.pop(0)
+        if t - self._frames[0][0] < self.window_s * 0.9 or t - self._last_warning < self.repeat_s:
+            return None
+        if sum(d for _, d in self._frames) / len(self._frames) < self.rate:
+            return None
+        self._last_warning = t
+        return ("Your eyelids are covering your eyes when you look down, so tracking keeps stopping. "
+                "Raise the screen a little, or sit a little lower.")

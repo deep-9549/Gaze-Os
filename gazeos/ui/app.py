@@ -42,6 +42,7 @@ from gazeos.ui.overlay import Overlay
 from gazeos.ui.panels import ButtonPanel, ConfirmPanel, PrivacyPanel
 from gazeos.ui.settings_dialog import SettingsDialog
 from gazeos.vision.head_pose import CameraIntrinsics
+from gazeos.vision.quality import LidDropMonitor
 
 log = logging.getLogger(__name__)
 
@@ -130,6 +131,7 @@ class GazeOSApp(QObject):
         self.personalizer = self._load_personalizer()
         # Says when the user has moved away from where the calibration was made.
         self.posture = PostureGuard()
+        self.lid_monitor = LidDropMonitor()  # says when the eyelids keep hiding the eyes
         if self.profile.has_calibration():
             origins = self.profile.load_calibration_features().get("origin")
             if origins is not None and len(origins):
@@ -289,7 +291,8 @@ class GazeOSApp(QObject):
     def _on_frame(self, packet: tuple[ProcessedFrame, EngineOutput | None, np.ndarray]) -> None:
         pf, out, image = packet
         if out is not None and pf.pose is not None and self.calibration is None and not out.paused:
-            msg = self.posture.update(pf.result.t_capture, pf.pose.gaze_origin)
+            msg = self.posture.update(pf.result.t_capture, pf.pose.gaze_origin) or self.lid_monitor.update(
+                pf.result.t_capture, pf.result.lid_down, pf.result.quality_ok)
             if msg:
                 self.overlay.show_toast(msg, 8)
         if out is not None:
