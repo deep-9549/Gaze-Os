@@ -73,11 +73,16 @@ class EngineOutput:
 
 
 class ControlEngine:
-    # Gaps between valid gaze samples. Up to FRAME_GAP_S is ordinary frame timing. A longer
-    # gap (a blink, a dropped frame) is not counted toward a dwell; past MAX_DWELL_GAP_S
-    # tracking was lost and the dwell starts again.
-    FRAME_GAP_S = 0.15
+    # Frames without a gaze sample, by cause. Tracking lost (no face, more than one face, too
+    # far, head turned away) or eyes closed: the time does not count toward a dwell, and
+    # after MAX_DWELL_GAP_S of it the dwell starts again, so a dwell can never finish on the
+    # first frame back. Face tracked with the eyes open but the sample dropped by the lid gate
+    # (lids lowered to look at the lower screen, a blink starting): the user is still looking
+    # where they were, so the time counts, for up to MAX_LID_GAP_S at a stretch. Not counting
+    # it froze the dwell on the lower keyboard rows, where the lid gate dropped 13-78% of the
+    # frames (18 Nov 2026 traces).
     MAX_DWELL_GAP_S = 0.6
+    MAX_LID_GAP_S = 1.5
 
     def __init__(
         self,
@@ -101,6 +106,9 @@ class ControlEngine:
         self.px_per_deg = geometry.deg_to_px(1.0)
         self._dwell_target: GazeTarget | None = None
         self._last_valid_t: float | None = None  # time of the last valid gaze sample
+        self._prev_t: float | None = None  # time of the previous frame of any kind
+        self._lost_run = 0.0  # seconds without a sample because tracking was lost or the eyes closed
+        self._lid_run = 0.0  # seconds without a sample because the lid gate dropped it
         self._build(settings)
         self.action = Action.LEFT
         self.dragging = False
@@ -155,6 +163,7 @@ class ControlEngine:
         self.zoom = None
         self._frozen = None
         self._last_valid_t = None
+        self._lost_run = self._lid_run = 0.0
 
     def set_action(self, action: Action) -> None:
         if self.dragging and action != Action.DRAG:
@@ -230,15 +239,27 @@ class ControlEngine:
         else:
             self._frozen = None
 
+        dt = 0.0 if self._prev_t is None else max(t - self._prev_t, 0.0)
+        self._prev_t = t
         if point is not None:
-            gap = 0.0 if self._last_valid_t is None else t - self._last_valid_t
-            if gap > self.MAX_DWELL_GAP_S:
-                self.dwell.reset()  # tracking was lost: a dwell from before must not finish now
-                self._dwell_target = None
-            elif gap > self.FRAME_GAP_S:
-                self.dwell.hold(gap)
             self._last_valid_t = t
+            self._lost_run = self._lid_run = 0.0
             self.cursor = point
+        elif q.ok and not (inp.eyes_closed or q.eye_closed):
+            # Face tracked, eyes open, sample dropped by the lid gate: the time counts. A gap
+            # this long means the gaze could be anywhere by now (looking down at the lap):
+            # the dwell starts again.
+            self._lid_run += dt
+            if self._lid_run > self.MAX_LID_GAP_S:
+                self.dwell.reset()
+                self._dwell_target = None
+        else:
+            # Tracking lost or eyes closed: does not count; a long loss starts the dwell again.
+            self.dwell.hold(dt)
+            self._lost_run += dt
+            if self._lost_run > self.MAX_DWELL_GAP_S:
+                self.dwell.reset()
+                self._dwell_target = None
         cursor = self._frozen if self._frozen is not None else self.cursor
 
         # Corners: top-right opens the menu, top-left toggles pause.
@@ -391,7 +412,9 @@ class ControlEngine:
     def _trusted(self, q: QualityReport, t: float) -> bool:
         """May a blink or gesture act at the cursor? Only with one face in view and a valid
         gaze sample recent enough to be from just before the blink."""
-        if q.status in (TrackingStatus.NO_FACE, TrackingStatus.MULTIPLE_FACES, TrackingStatus.MOVE_CLOSER):
+        if q.status in (TrackingStatus.NO_FACE, TrackingStatus.MULTIPLE_FACES):
+            return False
+        if q.status == TrackingStatus.MOVE_CLOSER and not q.ok:  # too far to track (far but tracked is fine)
             return False
         limit = self.s.blink.long_blink_max_ms / 1000.0 + 0.5
         return self._last_valid_t is not None and t - self._last_valid_t <= limit

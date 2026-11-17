@@ -46,7 +46,11 @@ class ScreenSettings(_Section):
 
 
 class QualitySettings(_Section):
+    # Below `min_inter_eye_px` the chip says "Move closer" but tracking goes on, less
+    # accurately; only below `min_inter_eye_px_hard` does it stop. A single hard limit at 60 px
+    # left the app dead at 58 px, a normal distance at 640x480 (18 Nov 2026).
     min_inter_eye_px: float = 60.0
+    min_inter_eye_px_hard: float = 40.0
     max_head_angle_deg: float = 35.0
     blink_score_threshold: float = 0.5
     # No gaze sample while a lid hides the iris or moves fast (a blink starting or ending),

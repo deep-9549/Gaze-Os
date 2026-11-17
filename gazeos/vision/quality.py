@@ -50,8 +50,11 @@ class QualityGate:
             low = QualityReport(ok=True, status=TrackingStatus.LOW_LIGHT, lower_confidence=True)
         else:
             low = None
-        if inter_eye_px < self.s.min_inter_eye_px:
+        if inter_eye_px < self.s.min_inter_eye_px_hard:
             return QualityReport(ok=False, status=TrackingStatus.MOVE_CLOSER, hold_cursor=True)
+        if inter_eye_px < self.s.min_inter_eye_px and low is None:
+            # Far, but trackable: keep tracking and ask the user to come closer.
+            low = QualityReport(ok=True, status=TrackingStatus.MOVE_CLOSER, lower_confidence=True)
         max_angle = math.radians(self.s.max_head_angle_deg)
         if abs(head_pitch) > max_angle or abs(head_yaw) > max_angle:
             return QualityReport(

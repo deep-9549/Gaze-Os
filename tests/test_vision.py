@@ -131,7 +131,10 @@ def test_quality_gates() -> None:
     g = QualityGate(QualitySettings())
     assert g.check(0.0, 1, inter_eye_px=100).ok
     assert g.check(0.0, 2, inter_eye_px=100).status == TrackingStatus.MULTIPLE_FACES
-    assert g.check(0.0, 1, inter_eye_px=40).status == TrackingStatus.MOVE_CLOSER
+    far = g.check(0.0, 1, inter_eye_px=50)  # far: warn, but keep tracking
+    assert far.status == TrackingStatus.MOVE_CLOSER and far.ok and far.lower_confidence
+    too_far = g.check(0.0, 1, inter_eye_px=35)  # too far to track
+    assert too_far.status == TrackingStatus.MOVE_CLOSER and not too_far.ok
     assert g.check(0.0, 1, inter_eye_px=100, brightness=20).status == TrackingStatus.LOW_LIGHT
     r = g.check(0.0, 1, inter_eye_px=100, head_yaw=math.radians(50))
     assert not r.ok and r.hold_cursor

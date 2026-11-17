@@ -242,3 +242,34 @@ def test_opening_the_keyboard_never_blocks_the_screen(qtbot, tmp_path) -> None:
             app.keyboard.close()
         for w in (app.overlay, app.action_bar, app.menu, app.shortcuts, app.debug):
             w.close()
+
+
+LID = QualityReport(ok=True, status=TrackingStatus.TRACKING)  # face tracked, sample dropped by the lid gate
+
+
+def test_frames_dropped_for_lowered_lids_still_count_toward_the_dwell(settings, geometry) -> None:
+    """Looking at the lower keyboard rows lowers the lids; the lid gate drops many of those
+    frames while the user keeps looking at the key. That time counts (18 Nov 2026 traces:
+    13-78% of the frames dropped on the lower rows froze the dwell)."""
+    eng, be = _engine(settings, geometry)
+    t = _feed(eng, 0.0, 0.3)
+    for _ in range(4):  # 0.4 s with every other frame dropped by the lid gate
+        t += 1 / 30
+        eng.update(EngineInput(t, None, LID))
+        t = _feed(eng, t, 1 / 30)
+        t += 1 / 30
+        eng.update(EngineInput(t, None, LID))
+    _feed(eng, t, 0.2)  # 0.9 s on the clock, a third of it without a sample
+    assert be.of_kind("click") == [("click", "left", 1)]
+
+
+def test_a_long_lid_gap_starts_the_dwell_again(settings, geometry) -> None:
+    eng, be = _engine(settings, geometry)
+    t = _feed(eng, 0.0, 0.2)
+    for _ in range(60):  # 2 s of dropped frames: the gaze could be anywhere by now
+        t += 1 / 30
+        eng.update(EngineInput(t, None, LID))
+    t = _feed(eng, t, 0.3)
+    assert not be.of_kind("click")  # no click on the frames right after the gap
+    _feed(eng, t, 0.6)  # a fresh full dwell does click
+    assert be.of_kind("click") == [("click", "left", 1)]
