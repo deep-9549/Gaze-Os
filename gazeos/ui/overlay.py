@@ -103,17 +103,20 @@ class Overlay(QWidget):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(target)
 
-        if out is not None and out.cursor is not None and self.show_cursor:
+        if out is not None and out.cursor is not None:
             c = self._p(*out.cursor)
-            target_r = max(10.0, min(out.sigma_px / self._ratio, 120.0))
-            # sigma_px changes every frame; ease the size (~0.3 s at 60 Hz) so it does not pulse.
-            self._radius = target_r if self._radius is None else self._radius + 0.05 * (target_r - self._radius)
-            radius = self._radius
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(color(th, "cursor", 60 if not out.paused else 25)))
-            painter.drawEllipse(c, radius, radius)
-            painter.setBrush(QBrush(color(th, "cursor", 200 if not out.paused else 80)))
-            painter.drawEllipse(c, 4.0, 4.0)
+            if self.show_cursor:
+                target_r = max(10.0, min(out.sigma_px / self._ratio, 120.0))
+                # sigma_px changes every frame; ease the size (~0.3 s at 60 Hz) so it does not pulse.
+                self._radius = target_r if self._radius is None else self._radius + 0.05 * (target_r - self._radius)
+                radius = self._radius
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QBrush(color(th, "cursor", 60 if not out.paused else 25)))
+                painter.drawEllipse(c, radius, radius)
+                painter.setBrush(QBrush(color(th, "cursor", 200 if not out.paused else 80)))
+                painter.drawEllipse(c, 4.0, 4.0)
+            # The ring stays when the cursor is hidden: it is the warning that a look is about to
+            # press something, and the way to find "Show gaze cursor" again by gaze.
             if out.dwell_progress > 0 and not out.paused:
                 ring = 26.0
                 pen = QPen(color(th, "ring"), 6)

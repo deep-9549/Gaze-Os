@@ -6,7 +6,7 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QObject, QPoint, QRect, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import QAbstractButton, QWidget
 
@@ -173,7 +173,10 @@ class MainThreadBridge(QObject):
 
 class TargetSync(QObject):
     """Keeps the engine's target registry in sync with the visible GazeOS buttons,
-    so every GazeOS screen is operable by gaze alone (PRD 7.7)."""
+    so every GazeOS screen is operable by gaze alone (PRD 7.7).
+
+    Only what can be seen can be pressed: a button scrolled out of view (Settings) is no
+    target, and a window's targets go the moment it hides, not at the next sync."""
 
     def __init__(self, registry: TargetRegistry, bridge: MainThreadBridge, interval_ms: int = 300) -> None:
         super().__init__()
@@ -185,12 +188,25 @@ class TargetSync(QObject):
         self._timer.start(interval_ms)
 
     def track(self, group: str, window: QWidget) -> None:
+        old = self._windows.get(group)
+        if old is not None and old is not window:
+            old.removeEventFilter(self)
         self._windows[group] = window
+        window.installEventFilter(self)
         self.sync()
 
     def untrack(self, group: str) -> None:
-        self._windows.pop(group, None)
+        window = self._windows.pop(group, None)
+        if window is not None:
+            window.removeEventFilter(self)
         self.registry.clear_group(group)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        if event.type() == QEvent.Type.Hide:
+            for group, win in self._windows.items():
+                if win is watched:
+                    self.registry.clear_group(group)
+        return False
 
     @Slot()
     def sync(self) -> None:
@@ -202,8 +218,11 @@ class TargetSync(QObject):
             for i, btn in enumerate(win.findChildren(QAbstractButton)):
                 if not btn.isVisible() or not btn.isEnabled():
                     continue
-                top_left = btn.mapToGlobal(QPoint(0, 0))
-                rect = to_physical(QRect(top_left, btn.size()), ratio)
+                seen = btn.visibleRegion().boundingRect()  # the part not clipped by a scroll area
+                if seen.isEmpty():
+                    continue
+                top_left = btn.mapToGlobal(seen.topLeft())
+                rect = to_physical(QRect(top_left, seen.size()), ratio)
                 key = f"{group}:{btn.objectName() or i}:{id(btn)}"
                 self.registry.register(GazeTarget(key, rect, self.bridge.later(btn.click), group,
                                                   repeat=bool(btn.property("gaze_repeat"))))
