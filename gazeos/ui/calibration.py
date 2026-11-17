@@ -54,6 +54,7 @@ class CalibrationWindow(QWidget):
         theme_name: str = "default",
         quick: bool = False,
         current_predict: Callable[[GazeObservation], np.ndarray] | None = None,
+        keep_previous: bool = False,
     ) -> None:
         super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.geometry_ = geometry
@@ -63,6 +64,8 @@ class CalibrationWindow(QWidget):
         self.theme_name = theme_name
         self.quick = quick
         self.current_predict = current_predict
+        # A calibration is already saved: a poor new one is not kept by itself (Accept still can).
+        self.keep_previous = keep_previous
         self.setStyleSheet(stylesheet(theme_name))
         self._lock = threading.Lock()
         if quick:
@@ -149,14 +152,15 @@ class CalibrationWindow(QWidget):
 
     def _arm_after_run(self, good: bool) -> None:
         """What happens by itself after a run: accept a good one; repeat a poor or failed one
-        a few times; then keep what there is (a poor fit) or close (no fit), so that a person
-        who cannot press a button is never left on this screen."""
+        a few times; then keep what there is (a poor fit, when nothing better is saved) or close,
+        so that a person who cannot press a button is never left on this screen and a stray
+        glance at "Calibrate" cannot replace a good calibration with a poor one."""
         d = self.s.auto_decide_s
         if good:
             self._arm(d, self._accept, "Accepting")
         elif self._auto_redos < self.s.auto_redo_limit:
             self._arm(d + 2.0, self._auto_redo, "Trying again")
-        elif self.result is not None:
+        elif self.result is not None and not self.keep_previous:
             self._arm(d + 2.0, self._accept, "Keeping this result")
         else:
             self._arm(d + 4.0, lambda: self._finish(None), "Closing (the earlier calibration is kept)")

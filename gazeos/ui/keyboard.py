@@ -98,6 +98,8 @@ class KeyboardWindow(QWidget):
             b.setObjectName(f"key_{key.id}")
             if key.letters or key.text or key.id in ("space", "backspace"):
                 b.setProperty("gaze_repeat", True)  # keep looking to type it again
+            if key.id == "enter":
+                b.setProperty("gaze_dwell_factor", 1.5)  # Enter sends forms and messages: a longer look
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             b.setGeometry(int(key.x * unit) + 2, int(key.y * unit) + 2, int(key.w * unit) - 4, int(key.h * unit) - 4)
             b.clicked.connect(lambda _=False, k=key: self._press(k))

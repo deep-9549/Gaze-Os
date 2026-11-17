@@ -707,3 +707,46 @@ def test_which_settings_changes_are_risky(settings) -> None:
     off = on.model_copy(deep=True)
     off.system.start_with_os = False
     assert risky_changes(on, off) and not risky_changes(off, on)
+
+
+def test_enter_needs_a_longer_look(settings, geometry) -> None:
+    """Enter sends forms and messages: 1.5 times the dwell; other keys keep the normal dwell."""
+    from gazeos.control.targets import GazeTarget, TargetRegistry
+    from gazeos.types import Rect
+
+    pressed: list[str] = []
+    reg = TargetRegistry()
+    reg.register(GazeTarget("keyboard:key_enter:1", Rect(650, 450, 100, 100), lambda: pressed.append("enter"),
+                            "keyboard", dwell_factor=1.5))
+    reg.register(GazeTarget("keyboard:key_a:2", Rect(1000, 450, 100, 100), lambda: pressed.append("a"), "keyboard"))
+    eng, _ = _engine(settings, geometry)
+    eng.registry = reg
+    t = _feed(eng, 0.0, 1.0)
+    assert pressed == []  # 1.0 s on Enter: not yet (1.2 s needed)
+    t = _feed(eng, t, 0.3)
+    assert pressed == ["enter"]
+    for _ in range(27):  # 0.9 s on A: the normal 0.8 s dwell
+        t += 1 / 30
+        eng.update(EngineInput(t, _obs((1050.0, 500.0)), OK))
+    assert pressed == ["enter", "a"]
+
+
+def test_a_poor_recalibration_does_not_replace_a_saved_one(qtbot, geometry) -> None:
+    """With a calibration saved, a poor new run closes by itself instead of keeping itself."""
+    pytest.importorskip("PySide6")
+    from gazeos.calibration.personalization import make_personalizer
+    from gazeos.calibration.protocol import ValidationResult
+    from gazeos.settings import CalibrationSettings
+    from gazeos.ui.calibration import CalibrationWindow
+
+    for keep_previous, expected in ((True, "close"), (False, "accept")):
+        cal = CalibrationSettings(auto_start_s=0.0, auto_decide_s=1.0, auto_redo_limit=0)
+        win = CalibrationWindow(geometry, make_personalizer("polynomial", geometry), cal, lambda o: None,
+                                keep_previous=keep_previous)
+        qtbot.addWidget(win)
+        win.result = ValidationResult([300.0], [5.0], 300.0, 5.0, 3.0, 20)  # score 20: poor
+        win._arm_after_run(good=False)
+        assert win._auto_step is not None
+        is_accept = getattr(win._auto_step, "__name__", "") == "_accept"
+        assert is_accept == (expected == "accept"), keep_previous
+        win._disarm()

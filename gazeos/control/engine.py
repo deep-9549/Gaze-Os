@@ -298,6 +298,7 @@ class ControlEngine:
             if point is not None and dwell_enabled and not self._in_scroll_zone(cursor):
                 dwell_point = self._dwell_point(cursor)
                 tgt = self._dwell_target
+                self.dwell.dwell_s = self.s.dwell.dwell_ms / 1000.0 * (tgt.dwell_factor if tgt is not None else 1.0)
                 if (tgt is not None and tgt.repeat and tgt.key == self._repeat_key
                         and self.dwell.state in (ControlState.FIRED, ControlState.COOLDOWN)
                         and t - self._repeat_t >= self.REPEAT_AFTER_S):
@@ -314,6 +315,7 @@ class ControlEngine:
             # else is pressed, clicked or typed.
             target = self.registry.hit(float(cursor[0]), float(cursor[1]))
             if target is not None and target.key.startswith(self.RESUME_TARGETS):
+                self.dwell.dwell_s = self.s.dwell.dwell_ms / 1000.0 * target.dwell_factor
                 upd = self.dwell.update(t, np.asarray(target.rect.center, dtype=np.float64))
                 progress = upd.progress
                 if upd.fired:

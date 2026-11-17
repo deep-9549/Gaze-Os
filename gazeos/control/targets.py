@@ -23,6 +23,8 @@ class GazeTarget:
     dwell_ms: float | None = None  # per-target dwell override
     # Pressed again while the gaze stays on it (typing keys: the second l of "hello", holding Del).
     repeat: bool = False
+    # Dwell time as a multiple of the user's: longer for keys whose press is hard to undo (Enter).
+    dwell_factor: float = 1.0
 
 
 class TargetRegistry:

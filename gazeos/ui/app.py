@@ -100,6 +100,10 @@ class SimulatedCapture:
 
 
 class GazeOSApp(QObject):
+    # Quick fix (one dot) corrects drift; a larger offset means the user was not looking at the
+    # dot or has moved too far for one point, and applying it would make things worse.
+    QUICK_FIX_MAX_DEG = 4.0
+
     def __init__(self, args: object) -> None:
         super().__init__()
         self.args = args
@@ -534,6 +538,7 @@ class GazeOSApp(QObject):
             self.geometry, p, self.settings.calibration, self._calibration_done, self.settings.theme,
             quick=quick,
             current_predict=(lambda obs: self.engine.drift.apply(self.personalizer.predict_px(obs))) if quick else None,
+            keep_previous=self.profile.has_calibration(),
         )
         self.sync.track("calibration", self.calibration)
         self.overlay.stay_on_top = False  # the dots, not the cursor, are what to look at
@@ -547,7 +552,12 @@ class GazeOSApp(QObject):
             self.worker.engine_enabled = True
             if outcome is not None:
                 if outcome.quick_offset is not None:
-                    self.engine.drift.offset = self.engine.drift.offset + outcome.quick_offset
+                    limit = self.geometry.deg_to_px(self.QUICK_FIX_MAX_DEG)
+                    if float(np.linalg.norm(outcome.quick_offset)) <= limit:
+                        self.engine.drift.offset = self.engine.drift.offset + outcome.quick_offset
+                    else:  # not looking at the dot, or moved too far for a one-point fix
+                        self.overlay.show_toast("Quick fix not applied: the correction it found was too large. "
+                                                "If you have moved, calibrate again.", 6)
                 else:
                     self._apply_calibration(outcome)
         if self.onboarding is not None:
