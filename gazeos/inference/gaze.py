@@ -53,6 +53,41 @@ def decode_bins(logits: NDArray[np.floating], centers_deg: FloatArray = BIN_CENT
     return np.asarray(np.radians(probs @ centers_deg), dtype=np.float64)
 
 
+AUTO_MODELS = (Path("models/gazenet_m3.onnx"), Path("models/gazenet_lite.onnx"))
+
+
+def resolve_gaze_model(name: str, budget_ms: float = 15.0,
+                       candidates: tuple[Path, ...] = AUTO_MODELS) -> Path | None:
+    """The model file to load: `name` itself, or for "auto" the first candidate that exists
+    and runs within `budget_ms` per frame here (the last existing one regardless)."""
+    if name != "auto":
+        return Path(name) if Path(name).exists() else None
+    existing = [p for p in candidates if p.exists()]
+    for path in existing[:-1]:
+        if benchmark_ms(path) <= budget_ms:
+            return path
+    return existing[-1] if existing else None
+
+
+def benchmark_ms(path: str | Path, runs: int = 20) -> float:
+    """Median time of one inference on a blank input, after a warm-up (the first runs of a
+    fresh session are slower: 16.9 ms cold against 12 ms warm for M3 on the dev laptop)."""
+    import time
+
+    est = OnnxGazeEstimator(path)
+    eye = np.zeros((36, 60), np.uint8)
+    norm = NormalizationResult(np.zeros((224, 224, 3), np.uint8), eye, eye, np.eye(3), np.eye(3), np.eye(3),
+                               (0.0, 0.0, 0.0))
+    for _ in range(10):
+        est.estimate(norm)
+    times = []
+    for _ in range(runs):
+        t0 = time.perf_counter()
+        est.estimate(norm)
+        times.append((time.perf_counter() - t0) * 1000.0)
+    return float(np.median(times))
+
+
 class OnnxGazeEstimator:
     """Wraps any exported gaze ONNX model following the GazeOS I/O contract.
 
@@ -95,7 +130,8 @@ class OnnxGazeEstimator:
         pitch = float(decode_bins(outs["pitch_logits"][0], self.centers))
         yaw = float(decode_bins(outs["yaw_logits"][0], self.centers))
         if "log_var" in outs:
-            sigma = np.sqrt(np.exp(np.asarray(outs["log_var"][0], dtype=np.float64)))
+            # Kept between 0.5 and 57 deg: the linear variance head extrapolates (E12).
+            sigma = np.sqrt(np.exp(np.clip(np.asarray(outs["log_var"][0], dtype=np.float64), -9.5, 0.0)))
         else:
             sigma = np.radians(np.array([3.0, 3.0]))
         py_n = np.array([pitch, yaw])

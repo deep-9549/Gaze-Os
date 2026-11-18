@@ -131,7 +131,10 @@ def test_quality_gates() -> None:
     g = QualityGate(QualitySettings())
     assert g.check(0.0, 1, inter_eye_px=100).ok
     assert g.check(0.0, 2, inter_eye_px=100).status == TrackingStatus.MULTIPLE_FACES
-    assert g.check(0.0, 1, inter_eye_px=40).status == TrackingStatus.MOVE_CLOSER
+    far = g.check(0.0, 1, inter_eye_px=50)  # far: warn, but keep tracking
+    assert far.status == TrackingStatus.MOVE_CLOSER and far.ok and far.lower_confidence
+    too_far = g.check(0.0, 1, inter_eye_px=35)  # too far to track
+    assert too_far.status == TrackingStatus.MOVE_CLOSER and not too_far.ok
     assert g.check(0.0, 1, inter_eye_px=100, brightness=20).status == TrackingStatus.LOW_LIGHT
     r = g.check(0.0, 1, inter_eye_px=100, head_yaw=math.radians(50))
     assert not r.ok and r.hold_cursor
@@ -139,3 +142,16 @@ def test_quality_gates() -> None:
     # Auto-pause only after the face has been lost for more than a second.
     assert not g.check(0.5, 0).auto_pause
     assert g.check(1.2, 0).auto_pause
+
+
+def test_lid_drop_monitor_explains_a_stalling_cursor() -> None:
+    from gazeos.vision.quality import LidDropMonitor
+
+    m = LidDropMonitor(window_s=5.0, rate=0.4, repeat_s=120.0)
+    t = 0.0
+    for i in range(150):  # 5 s with 1 frame in 5 dropped: normal blinking
+        t = i / 30
+        assert m.update(t, i % 5 == 0, True) is None
+    msgs = [m.update(5 + i / 30, i % 4 != 0, True) for i in range(200)]  # 3 of 4 dropped
+    assert sum(x is not None for x in msgs) == 1 and "Raise the screen" in next(x for x in msgs if x)
+    assert m.update(20.0, True, False) is None  # no face: not this problem

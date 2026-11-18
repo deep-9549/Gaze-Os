@@ -7,9 +7,9 @@ its own copy.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ControlMode(StrEnum):
@@ -46,12 +46,29 @@ class ScreenSettings(_Section):
 
 
 class QualitySettings(_Section):
+    # Below `min_inter_eye_px` the chip says "Move closer" but tracking goes on, less
+    # accurately; only below `min_inter_eye_px_hard` does it stop. A single hard limit at 60 px
+    # left the app dead at 58 px, a normal distance at 640x480 (18 Nov 2026).
     min_inter_eye_px: float = 60.0
+    min_inter_eye_px_hard: float = 40.0
     max_head_angle_deg: float = 35.0
     blink_score_threshold: float = 0.5
+    # No gaze sample while a lid hides the iris or moves fast (a blink starting or ending),
+    # and for a few frames after; a lid lowered to look down is fine (ADR 0007).
+    lid_hidden_level: float = Field(0.45, ge=0.0, le=1.0)  # either eye's blink score
+    lid_speed: float = Field(0.1, gt=0.0)  # change of the blink score in one frame
+    lid_hold_frames: int = Field(2, ge=0)
     min_brightness: float = 50.0
     face_lost_pause_s: float = 1.0
     head_pose_disagreement_deg: float = 10.0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_old_lid_rule(cls, data: Any) -> Any:
+        """Profiles saved on 27 Oct 2026 carry the replaced fixed lid threshold."""
+        if isinstance(data, dict):
+            data = {k: v for k, v in data.items() if k not in ("gaze_lid_threshold", "gaze_lid_hold_frames")}
+        return data
 
 
 class FilterSettings(_Section):
@@ -67,15 +84,35 @@ class FilterSettings(_Section):
 
 
 class FixationSettings(_Section):
-    saccade_velocity_deg_s: float = 30.0
+    # A saccade is a jump of the raw gaze away from the cursor, confirmed on consecutive
+    # frames; the PRD's 30 deg/s velocity rule fires on webcam noise (ADR 0006).
+    saccade_jump_deg: float = Field(7.0, gt=0)
+    saccade_confirm_frames: int = Field(2, ge=1)
     dispersion_deg: float = 1.0
     min_fixation_ms: float = 100.0
+    # While fixating, the cursor glides to the fixation's median (`hold_ease` of the way per
+    # frame) and stays put while the median stays within the dead band, from
+    # `hold_lock_after_ms` after its last real move. On the developer's webcam after
+    # calibration: still in 47-61% of frames instead of 13-21%, 24-35% less jitter (ADR 0008).
+    hold_deadband_deg: float = Field(0.75, ge=0.0)
+    hold_ease: float = Field(0.3, gt=0.0, le=1.0)
+    hold_lock_after_ms: float = Field(300.0, ge=0.0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_velocity_rule(cls, data: Any) -> Any:
+        """Profiles saved before ADR 0006 still carry the old velocity setting."""
+        if isinstance(data, dict):
+            data = {k: v for k, v in data.items() if k != "saccade_velocity_deg_s"}
+        return data
 
 
 class DwellSettings(_Section):
     dwell_ms: float = Field(800.0, ge=300.0, le=2000.0)
     radius_deg: float = Field(1.5, gt=0)
     cooldown_ms: float = Field(500.0, ge=0)
+    # On GazeOS's own targets dwell counts per target; leaving one needs this much margin.
+    target_margin_deg: float = Field(0.5, ge=0.0)
     enabled: bool = True
 
 
@@ -84,6 +121,13 @@ class BlinkSettings(_Section):
     long_blink_max_ms: float = Field(1000.0, ge=300.0)
     wink_min_ms: float = Field(300.0, ge=100.0)
     pause_close_ms: float = Field(2000.0, ge=1000.0)
+    # Off by default: looking down at the keyboard reads as closed eyes on a laptop webcam
+    # (REVIEW.md item 12), so a 2 s glance toggled pause. The hotkey and corner still pause.
+    eyes_closed_pause: bool = False
+    # Both eyes count as closed above this blink score. Blink tuning sets it per user
+    # (90% of their long blinks' peak): looking down at the keyboard reached 0.49-0.63
+    # where deliberate long blinks peaked at 0.73-0.76 (ADR 0007).
+    closed_score: float = Field(0.5, ge=0.3, le=0.95)
     ear_threshold: float = Field(0.21, gt=0, lt=1)
     winks_enabled: bool = False
 
@@ -145,6 +189,23 @@ class TypingSettings(_Section):
     tts_engine: Literal["pyttsx3", "piper", "none"] = "pyttsx3"
     piper_voice: str | None = None
     min_key_error_multiple: float = 2.5
+    # Off: keeping the gaze on a key does not type it again (look away and back instead). On
+    # 18 Nov 2026 the cursor sat a row above the key being looked at, and with repeat on, the
+    # wrong letter was typed up to 14 times in a row while the user kept looking.
+    key_repeat: bool = False
+    # When the keyboard opens and the last calibration or "Fix cursor" is older than this,
+    # the cursor is re-aimed first (one dot, about 4 s); 0 = never. Webcam gaze shifts with
+    # posture: on 18 Nov it was 2-4 cm off within two minutes of a good calibration, and one
+    # dot removed most of it (163 -> 60 px on the keys the user marked).
+    auto_aim_after_s: float = Field(120.0, ge=0.0)
+    # Dwell on a keyboard key as a multiple of the dwell time (Enter and Close take 1.5): time to
+    # see the ring start on the wrong key and look away before it presses (18 Nov: "many false
+    # clicks"). The word predictions take 1.5.
+    key_dwell_factor: float = Field(1.25, ge=1.0, le=3.0)
+    # Off: while the keyboard is open, a dwell that is on no GazeOS button clicks nothing, so
+    # reading the text being typed does not click into it and move the caret (18 Nov: about 10
+    # dwell clicks landed on the text above the keyboard). Close the keyboard to click elsewhere.
+    clicks_outside_keyboard: bool = False
 
 
 class CalibrationSettings(_Section):
@@ -152,8 +213,21 @@ class CalibrationSettings(_Section):
     target_duration_s: float = 1.5
     keep_from_s: float = 0.5
     mad_threshold: float = 3.0
+    # Usable samples a dot needs (of about 30); a dot short of it is shown once more,
+    # and calibration stops rather than guess a missing area (REVIEW.md item 12).
+    min_samples_per_point: int = Field(10, ge=1)
     method: Literal["none", "offset", "polynomial", "gp", "finetune"] = "polynomial"
-    implicit_enabled: bool = True
+    # Calibration runs without its buttons, which gaze cannot press (the engine is off while
+    # it runs): it starts after `auto_start_s`, accepts a score of `auto_accept_score` or
+    # more after `auto_decide_s`, and otherwise repeats up to `auto_redo_limit` times. The
+    # buttons stay for a helper with a mouse. `auto_start_s` 0 waits for the Start button.
+    auto_start_s: float = Field(5.0, ge=0.0)
+    auto_decide_s: float = Field(6.0, ge=1.0)
+    auto_accept_score: int = Field(60, ge=0, le=100)
+    auto_redo_limit: int = Field(2, ge=0)
+    # Off: a gaze click lands where the cursor is, so its label repeats the tracker's own
+    # error; 20 typed keys moved the Space row 9-10 mm up (ADR 0009).
+    implicit_enabled: bool = False
     implicit_refit_every: int = 20
     implicit_decay_min: float = 30.0
 
@@ -180,6 +254,9 @@ class Settings(_Section):
     typing: TypingSettings = Field(default_factory=TypingSettings)
     calibration: CalibrationSettings = Field(default_factory=CalibrationSettings)
     privacy: PrivacySettings = Field(default_factory=PrivacySettings)
-    gaze_model: str = "models/gazenet_lite_int8.onnx"
+    # A model path, or "auto": M3 when this CPU runs it within 15 ms per frame (on the
+    # developer's webcam 27% more accurate after calibration and 23% less noisy than M4,
+    # ADR 0008), else the fp32 M4 (2.5 ms; static INT8 lost 1.2° and was rejected).
+    gaze_model: str = "auto"
     gesture_model: str | None = "models/gesture_tcn.onnx"
     theme: Literal["default", "high_contrast", "large_text"] = "default"

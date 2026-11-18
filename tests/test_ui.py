@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import string
 import time
 
 import numpy as np
@@ -32,7 +33,7 @@ def test_calibration_window_end_to_end(qtbot, settings, geometry, intrinsics, us
     from gazeos.ui.calibration import CalibrationWindow
 
     outcomes = []
-    cal = CalibrationSettings(target_duration_s=0.3, keep_from_s=0.05)
+    cal = CalibrationSettings(target_duration_s=0.3, keep_from_s=0.05, min_samples_per_point=3)
     win = CalibrationWindow(geometry, make_personalizer("polynomial", geometry), cal, outcomes.append)
     qtbot.addWidget(win)
     win.resize(800, 600)
@@ -50,6 +51,32 @@ def test_calibration_window_end_to_end(qtbot, settings, geometry, intrinsics, us
     assert win.result.score >= 70, win.result
     win._accept()
     assert outcomes and outcomes[0].validation.score == win.result.score
+
+
+def test_calibration_repeats_a_dot_without_data_then_names_the_area(qtbot, settings, geometry, intrinsics,
+                                                                   user) -> None:
+    """A dot whose frames are all dropped (e.g. lids covering the eyes at the bottom of the
+    screen) is shown once more; if it fails again calibration stops instead of guessing."""
+    from gazeos.ui.calibration import CalibrationWindow
+
+    cal = CalibrationSettings(target_duration_s=0.3, keep_from_s=0.05, min_samples_per_point=3)
+    win = CalibrationWindow(geometry, make_personalizer("polynomial", geometry), cal, lambda o: None)
+    qtbot.addWidget(win)
+    win.resize(800, 600)
+    win.show()
+    proc = FrameProcessor(settings, geometry, intrinsics, None)
+    blind = (0.5 * geometry.width_px, 0.9 * geometry.height_px)  # bottom centre
+    win.start()
+    deadline = time.monotonic() + 20
+    while win.phase in ("calibrate", "validate") and time.monotonic() < deadline:
+        pts = win._points()
+        if 0 <= win.index < len(pts):
+            pf = proc.process_landmarks(user.look_at(*pts[win.index]), time.monotonic())
+            win.add_frame(time.monotonic(), None if pts[win.index] == blind else pf.observation, False)
+        qtbot.wait(10)
+    assert len(win.targets) == 10 and win.targets[-1] == blind  # shown once more at the end
+    assert win.phase == "failed" and win.result is None
+    assert "bottom" in win.fail_message
 
 
 def test_keyboard_types_through_gaze_targets(qtbot, predictor) -> None:
@@ -74,6 +101,57 @@ def test_keyboard_types_through_gaze_targets(qtbot, predictor) -> None:
     assert kb.pred_buttons[0].text() != ""
 
 
+@pytest.mark.parametrize("layout_name", ["qwerty", "alphabetical"])
+def test_keyboard_123_types_digits_and_symbols(qtbot, predictor, layout_name) -> None:
+    """By gaze alone: 123 swaps the letters for digits and symbols at the same key size, with
+    Space, Del and Enter where they were and ABC where 123 was; symbols type literally; #+=
+    opens the second page; ABC brings the letters back."""
+    from gazeos.ui.common import MainThreadBridge, TargetSync
+    from gazeos.ui.keyboard import KeyboardWindow
+
+    typed: list[str] = []
+    session = TypingSession(get_layout(layout_name), predictor, emit=typed.append)
+    kb = KeyboardWindow(session, PhraseBank(), SilentSpeaker(), 40.0, lambda: None)
+    qtbot.addWidget(kb)
+    kb.show()
+    reg = TargetRegistry()
+    sync = TargetSync(reg, MainThreadBridge())
+    sync.track("keyboard", kb)
+
+    def look_at(label: str) -> None:
+        """What the engine does when a dwell lands on the key showing `label`."""
+        sync.sync()  # the app re-reads the buttons every 300 ms
+        button = next(b for b in kb.key_buttons.values() if b.text().replace("&&", "&") == label)
+        target = next(t for t in reg.all() if t.key.split(":")[1] == button.objectName())
+        with qtbot.waitSignal(button.clicked, timeout=2000):
+            target.callback()
+
+    letters = set(string.ascii_lowercase)
+    unit = kb.unit
+    in_place = {kid: kb.key_buttons[kid].geometry() for kid in ("space", "backspace", "enter")}
+    assert all(g.width() > 0 and g.height() > 0 for g in in_place.values())  # alphabetical's Space was 0 wide
+    numbers_key = kb.key_buttons["numbers"].geometry()
+
+    look_at("123")
+    assert kb.current_layout.name == f"{layout_name}-123"
+    assert {"1", "0", "@"} <= {b.text() for b in kb.key_buttons.values()} and not letters & set(kb.key_buttons)
+    assert kb.unit == unit  # the keys did not shrink
+    assert {kid: kb.key_buttons[kid].geometry() for kid in in_place} == in_place
+    assert kb.key_buttons["letters"].text() == "ABC" and kb.key_buttons["letters"].geometry() == numbers_key
+    for label in ("7", "@", "/", "&"):
+        look_at(label)
+    assert session.text == "7@/&"
+    for label in ("Space", "Del", "Enter"):
+        look_at(label)
+    assert session.text == "7@/&\n"
+    for label in ("#+=", "\\", "123", "ABC"):
+        look_at(label)
+    assert kb.current_layout is session.layout  # the letters the user came from
+    assert letters <= set(kb.key_buttons) and "1" not in {b.text() for b in kb.key_buttons.values()}
+    look_at("A")
+    assert session.text == "7@/&\n\\a" and "".join(typed) == "7@/& \\a"  # each once; Del and Enter are keys
+
+
 def test_settings_dialog_edits_and_validates(qtbot, settings) -> None:
     from PySide6.QtWidgets import QPushButton
 
@@ -82,6 +160,7 @@ def test_settings_dialog_edits_and_validates(qtbot, settings) -> None:
     saved: list[Settings] = []
     dlg = SettingsDialog(settings, saved.append)
     qtbot.addWidget(dlg)
+    dlg.show()
     inc = dlg.findChild(QPushButton, "set_dwell_ms_inc")
     toggle = dlg.findChild(QPushButton, "set_winks_enabled")
     cycle = dlg.findChild(QPushButton, "set_layout")
@@ -92,13 +171,14 @@ def test_settings_dialog_edits_and_validates(qtbot, settings) -> None:
     for _ in range(40):  # clamps at the schema maximum instead of crashing
         inc.click()
     dlg.findChild(QPushButton, "settings_save").click()
+    assert not saved and dlg.confirm is not None  # a 2 s dwell asks first (tests/test_safety.py)
+    qtbot.addWidget(dlg.confirm)
+    dlg.confirm.yes_btn.click()
     s = saved[0]
     assert 800 < s.dwell.dwell_ms <= 2000 and s.blink.winks_enabled and s.typing.layout == "alphabetical"
 
 
 def test_privacy_panel_deletes(qtbot, tmp_path) -> None:
-    from PySide6.QtWidgets import QPushButton
-
     from gazeos.profiles.store import ProfileStore
     from gazeos.ui.panels import PrivacyPanel
 
@@ -106,11 +186,12 @@ def test_privacy_panel_deletes(qtbot, tmp_path) -> None:
     deleted = []
     panel = PrivacyPanel(p, lambda: deleted.append(1))
     qtbot.addWidget(panel)
+    panel.show()
     assert "Settings" in panel.items.text()
-    btn = panel.findChild(QPushButton, "privacy_delete")
-    btn.click()
-    assert p.path.exists()  # first click only arms the confirmation
-    btn.click()
+    panel.delete_btn.click()
+    assert p.path.exists() and panel.confirm is not None  # asks in a separate panel (tests/test_safety.py)
+    qtbot.addWidget(panel.confirm)
+    panel.confirm.yes_btn.click()
     assert not p.path.exists() and deleted
 
 
@@ -142,17 +223,20 @@ def test_onboarding_blink_tuning(qtbot) -> None:
     from gazeos.ui.onboarding import Onboarding
 
     done = []
-    onb = Onboarding(lambda: None, done.append)
+    onb = Onboarding(lambda: None, lambda ms, closed: done.append((ms, closed)))
     qtbot.addWidget(onb)
     onb.show()
     onb.stack.setCurrentIndex(1)
     pf = ProcessedFrame(FrameResult(0.0), None)  # type: ignore[arg-type]
     img = np.zeros((480, 640, 3), np.uint8)
-    for ms in (150, 180, 200, 170, 160, 520, 600, 560, 650, 580):
-        onb.update_frame(pf, img, float(ms))
+    peaks = (0.55, 0.6, 0.58, 0.62, 0.57, 0.74, 0.75, 0.73, 0.76, 0.74)  # long blinks close further
+    for ms, peak in zip((150, 180, 200, 170, 160, 520, 600, 560, 650, 580), peaks, strict=True):
+        onb.update_frame(pf, img, float(ms), peak)
     assert onb.threshold is not None and 200 < onb.threshold < 520
+    # 90% of the long blinks' typical peak: above a keyboard glance (about 0.6) for this user.
+    assert onb.closed_score is not None and abs(onb.closed_score - 0.9 * 0.74) < 1e-6
     onb._finish()
-    assert done == [onb.threshold]
+    assert done == [(onb.threshold, onb.closed_score)]
 
 
 def test_overlay_painting_does_not_leak_none(qtbot, geometry) -> None:
@@ -171,3 +255,43 @@ def test_overlay_painting_does_not_leak_none(qtbot, geometry) -> None:
     for _ in range(300):
         ov.grab()
     assert sys.getrefcount(None) - before > -100
+
+
+def test_personal_closed_score_ignores_a_keyboard_glance(settings, geometry, intrinsics, user) -> None:
+    """With the tuned level (0.67), lids at 0.6 (looking down at the keyboard) are not a
+    closure, so no long-blink click; a real long blink (0.75) still is (ADR 0007)."""
+    from gazeos.gestures.blink import BlinkEvent
+
+    s = settings.model_copy(deep=True)
+    s.blink.closed_score = 0.67
+    proc = FrameProcessor(s, geometry, intrinsics, None)
+    events = []
+    t = 0.0
+    for score, frames in ((0.05, 10), (0.6, 18), (0.05, 10), (0.75, 18), (0.05, 10)):  # 600 ms each
+        for _ in range(frames):
+            lm = user.look_at(960, 540)
+            lm.blendshapes = {**(lm.blendshapes or {}), "eyeBlinkLeft": score, "eyeBlinkRight": score}
+            events.append(proc.process_landmarks(lm, t).engine_input.blink_event)
+            t += 1 / 30
+    assert [e for e in events if e is not None] == [BlinkEvent.LONG_BLINK]
+
+
+def test_small_target_test_records_hits_misses_and_wrong_clicks(qtbot) -> None:
+    from tools.small_targets import SmallTargetTest, make_trials
+
+    trials = make_trials(per_size=1, seed=0)
+    w = SmallTargetTest(trials)
+    qtbot.addWidget(w)
+    w.resize(1280, 800)
+    w.start()
+    target = trials[0]["target"]
+    w.buttons[(target + 1) % 7].click()  # a wrong button first
+    w.buttons[target].click()
+    w.buttons[trials[1]["target"]].click()
+    w.t_start -= 25  # trial 3 times out
+    w._check_timeout()
+    r = w.results
+    assert [x["hit"] for x in r] == [True, True, False]
+    assert (r[0]["first_click_correct"], r[0]["wrong_clicks"]) == (False, 1)
+    assert r[1]["first_click_correct"] and r[1]["wrong_clicks"] == 0
+    assert w.buttons[0].width() == trials[3]["size"]  # now on trial 4

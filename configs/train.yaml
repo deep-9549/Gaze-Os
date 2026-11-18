@@ -6,6 +6,7 @@ defaults:
 seed: 0
 output_dir: outputs/${hydra:job.name}/${now:%Y%m%d-%H%M%S}
 init_checkpoint: null
+init_face_checkpoint: null  # face-stream backbone only, e.g. data/weights/eth-xgaze-resnet18/model.safetensors
 
 model:
   backbone: resnet18        # resnet18 (M3), mobilenet_v3_small (M4), resnet50
@@ -20,9 +21,11 @@ model:
 data:
   shards: [data/shards/mpiifacegaze/*.h5]
   fold: null                # leave-one-subject-out test subject index, or null
+  exclude_subjects: []      # never used in this run (e.g. a cross-dataset test set)
   val_fraction: 0.1
   stride: 1                 # subsampling; recorded with the results
   augment: true
+  sensor_noise_p: 0.0       # probability of added sensor noise (consistency fine-tune)
   workers: 4
 
 train:
@@ -39,6 +42,8 @@ train:
   nll_weight: 0.1
   nll_warmup_epochs: 5
   loss_mode: combined       # combined | classification | regression (E3)
+  consistency: 0.0          # weight of the two-view consistency term (0 = one view)
+  resume: false             # continue from output_dir/last.pt if it exists
 
 logging:
   backend: tensorboard      # tensorboard | wandb | none

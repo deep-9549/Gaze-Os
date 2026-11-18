@@ -8,7 +8,7 @@ import numpy as np
 from numpy.typing import NDArray
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
-from PySide6.QtWidgets import QGridLayout, QLabel, QWidget
+from PySide6.QtWidgets import QGridLayout, QLabel, QPushButton, QWidget
 
 from gazeos.pipeline import ProcessedFrame
 from gazeos.vision import face_model as fm
@@ -48,6 +48,14 @@ class DebugView(QWidget):
         grid.addWidget(self.left_eye, 2, 1)
         grid.addWidget(self.attention, 0, 2)
         grid.addWidget(self.stats, 1, 2, 2, 1)
+        # A big button that gaze can press, so the view can be closed where it is (the app
+        # registers it as a gaze target); before, only the menu's toggle closed it.
+        self.close_btn = QPushButton("Close debug view")
+        self.close_btn.setObjectName("debug_close")
+        self.close_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.close_btn.setMinimumSize(200, 64)
+        self.close_btn.clicked.connect(self.hide)
+        grid.addWidget(self.close_btn, 3, 0, 1, 3)
         self.live_error_px: float | None = None
         self.fps = 0.0
 

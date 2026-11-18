@@ -15,7 +15,8 @@ on that repository; then the branch `feature/gazeos-build` can be pushed.
 ## 1. Week 1-2 (start now: approvals take days)
 
 - [ ] **Request dataset access**: ETH-XGaze, Gaze360 and GazeCapture (registration forms on each project
-      site). MPIIFaceGaze is a direct download.
+      site). MPIIFaceGaze is a direct download. ETH-XGaze could not be obtained so far, so training
+      follows [PLAN.md](PLAN.md) (RT-GENE + ETH-XGaze-trained ResNet-18 weights) until it arrives.
 - [ ] **Ethics application**: a draft is in `docs/study/ethics_application_draft.md`. Fill in the names, the
       committee's form and submit it.
 - [ ] **Contact one or two rehabilitation centres or NGOs** for case-study participants
@@ -28,10 +29,12 @@ on that repository; then the branch `feature/gazeos-build` can be pushed.
   gazeos --dry-run          # watch the overlay follow your eyes; nothing is clicked
   gazeos                    # full control; Ctrl+Alt+G stops everything
   ```
-  Then download the L2CS-Net MPIIGaze weights from https://github.com/Ahmednull/L2CS-Net and convert them:
+  Then convert the L2CS-Net Gaze360 weights. The Google Drive link in the L2CS-Net README is dead and no
+  MPIIGaze weights are available, so use the Hugging Face mirror (already in `data/weights/l2cs/`):
   ```bash
-  python -m training.convert_l2cs L2CSNet_mpiigaze.pkl models/l2cs_mpii.onnx --dataset mpiigaze
-  gazeos --gaze-model models/l2cs_mpii.onnx
+  hf download py-feat/l2cs --local-dir data/weights/l2cs
+  python -m training.convert_l2cs data/weights/l2cs/l2cs_gaze360_resnet50.safetensors models/l2cs_gaze360.onnx --dataset gaze360
+  gazeos --gaze-model models/l2cs_gaze360.onnx
   ```
   Check the debug view
   (menu > Debug view): the gaze arrow should point where you look. If pitch or yaw come out mirrored,
@@ -42,8 +45,9 @@ on that repository; then the branch `feature/gazeos-build` can be pushed.
 
 - [ ] **Pack the public datasets** once downloaded:
   ```bash
-  python -m training.data.packers mpiifacegaze /path/to/MPIIFaceGaze data/shards/mpiifacegaze
-  python -m training.data.packers ethxgaze /path/to/xgaze_224/train data/shards/ethxgaze --stride 3
+  python -m training.data.packers mpiifacegaze data/raw/MPIIFaceGaze data/shards/mpiifacegaze
+  python -m training.data.packers rtgene data/raw/rtgene data/shards/rtgene
+  python -m training.data.packers ethxgaze /path/to/xgaze_224/train data/shards/ethxgaze --stride 3   # if access arrives
   ```
 - [ ] **Collect GazeOS-Webcam** (after ethics approval; signed consent first, see `docs/study/`):
   `python -m tools.collect --out data/recordings`, three sessions per participant (50/65/80 cm,
@@ -62,12 +66,12 @@ Upload the shards (not the raw datasets) to a private Kaggle dataset.
 
 ## 4. Real-hardware checks (any time from week 2)
 
-- [ ] Run `python -m tools.latency_profiler --seconds 60 --model models/gazenet_lite_int8.onnx` on the
+- [ ] Run `python -m tools.latency_profiler --seconds 60 --model models/gazenet_lite.onnx` on the
       reference laptop and a 10-minute `--soak`; compare against PRD 18.2.
 - [ ] Windows checks no container can do: clicks land on the right pixel at 125% and 150% display scaling;
       the keyboard and action bar never steal focus; UI Automation snapping works in a browser and in
       Explorer; text-to-speech speaks.
-- [ ] Optional: `python -m tools.camera_calibration` with a printed checkerboard (ablation E4).
+- [ ] Camera intrinsics (ablation E4): `python -m tools.camera_calibration --make-board board.png`, show it full screen on a phone (or print it), then `python -m tools.camera_calibration --profile default`.
 
 ## 5. User study (weeks 9-13, after approval)
 

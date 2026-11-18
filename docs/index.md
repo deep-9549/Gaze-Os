@@ -7,4 +7,5 @@ for installation, then:
 - [Product requirements](PRD.md): the full design, from goals to the demo plan.
 - [Build status](STATUS.md): every requirement and what state it is in.
 - [Your next steps](HANDOFF.md): what needs a person, data or a GPU.
+- [Plan without ETH-XGaze](PLAN.md): the living step-by-step plan and its status.
 - [Training](TRAINING.md): commands for every training stage and experiment.

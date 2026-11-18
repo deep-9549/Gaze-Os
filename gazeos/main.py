@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 
 
@@ -29,6 +30,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if getattr(sys, "frozen", False):
+        # Installed build: model paths ("models/...") are relative to the bundled data,
+        # whatever folder a shortcut starts the app in.
+        os.chdir(getattr(sys, "_MEIPASS", os.path.dirname(sys.executable)))
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",

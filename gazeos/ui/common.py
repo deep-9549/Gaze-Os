@@ -6,11 +6,11 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QObject, QPoint, QRect, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import QAbstractButton, QWidget
 
-from gazeos.control.targets import GazeTarget, TargetRegistry
+from gazeos.control.targets import GazeTarget, TargetRegistry, covered_fraction
 from gazeos.types import Rect, TrackingStatus
 
 # Colours chosen for WCAG 2.1 AA contrast (>= 4.5:1 for text) on their backgrounds.
@@ -19,11 +19,17 @@ THEMES: dict[str, dict[str, str]] = {
         "bg": "#1E1F24", "panel": "#2A2C33", "fg": "#F2F3F5", "muted": "#B8BCC6",
         "accent": "#4DA3FF", "accent_fg": "#0B1220", "ok": "#3FCF8E", "warn": "#FFC24D",
         "bad": "#FF6B6B", "ring": "#4DA3FF", "cursor": "#4DA3FF",
+        # Calibration runs on the same dark surface as the keyboard: the screen lights the face,
+        # and a fit made under a light screen was 6 mm worse on the dark keyboard than one made
+        # under a dark screen (18 Nov 2026 captures, 12 against 18 mm). Overrides ADR 0006's
+        # light surface, chosen before the keyboard was in daily use.
+        "calib_bg": "#2A2C33", "calib_fg": "#F2F3F5", "calib_dot": "#4DA3FF", "calib_check": "#3FCF8E",
     },
     "high_contrast": {
         "bg": "#000000", "panel": "#000000", "fg": "#FFFFFF", "muted": "#FFFFFF",
         "accent": "#FFFF00", "accent_fg": "#000000", "ok": "#00FF00", "warn": "#FFFF00",
         "bad": "#FF4040", "ring": "#FFFF00", "cursor": "#00FFFF",
+        "calib_bg": "#FFFFFF", "calib_fg": "#000000", "calib_dot": "#000000", "calib_check": "#0000C0",
     },
 }
 THEMES["large_text"] = THEMES["default"]
@@ -112,6 +118,25 @@ def apply_no_activate(widget: QWidget, click_through: bool = False) -> None:
     user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
 
 
+def bring_to_top(widget: QWidget) -> None:
+    """Put an always-on-top window above the other always-on-top windows without
+    activating it (a shown or clicked topmost window otherwise covers it)."""
+    if sys.platform != "win32":
+        widget.raise_()
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    set_pos = ctypes.windll.user32.SetWindowPos  # type: ignore[attr-defined]
+    # Without argtypes ctypes passes HWND_TOPMOST (-1) as a 32-bit int, which 64-bit
+    # Windows does not read as -1, and the call silently does nothing.
+    set_pos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                        wintypes.UINT]
+    HWND_TOPMOST = wintypes.HWND(-1)
+    SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 0x0001, 0x0002, 0x0010
+    set_pos(int(widget.winId()), HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
+
+
 def device_ratio(widget: QWidget | None = None) -> float:
     screen = widget.screen() if widget is not None else QGuiApplication.primaryScreen()
     return float(screen.devicePixelRatio()) if screen is not None else 1.0
@@ -146,9 +171,23 @@ class MainThreadBridge(QObject):
         return lambda: self.call.emit(fn)
 
 
+# Which GazeOS window is in front where two overlap (higher = in front): the side bar is behind
+# everything, the keyboard in front of it, panels in front of the keyboard, questions on top.
+TARGET_LAYERS = {"action_bar": 0, "keyboard": 10, "debug": 20, "menu": 30, "shortcuts": 30, "settings": 40,
+                 "privacy": 40, "onboarding": 40, "calibration": 50, "confirm": 60}
+DEFAULT_LAYER = 20
+# A button this much under a window in front of it is hidden: not a target.
+HIDDEN_FRACTION = 0.25
+
+
 class TargetSync(QObject):
     """Keeps the engine's target registry in sync with the visible GazeOS buttons,
-    so every GazeOS screen is operable by gaze alone (PRD 7.7)."""
+    so every GazeOS screen is operable by gaze alone (PRD 7.7).
+
+    Only what can be seen can be pressed: a button scrolled out of view (Settings) is no
+    target, nor one under another GazeOS window in front of it (the side bar's buttons under
+    the keyboard took presses meant for its keys, 18 Nov 2026), and a window's targets go the
+    moment it hides, not at the next sync."""
 
     def __init__(self, registry: TargetRegistry, bridge: MainThreadBridge, interval_ms: int = 300) -> None:
         super().__init__()
@@ -160,24 +199,49 @@ class TargetSync(QObject):
         self._timer.start(interval_ms)
 
     def track(self, group: str, window: QWidget) -> None:
+        old = self._windows.get(group)
+        if old is not None and old is not window:
+            old.removeEventFilter(self)
         self._windows[group] = window
+        window.installEventFilter(self)
         self.sync()
 
     def untrack(self, group: str) -> None:
-        self._windows.pop(group, None)
+        window = self._windows.pop(group, None)
+        if window is not None:
+            window.removeEventFilter(self)
         self.registry.clear_group(group)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        if event.type() == QEvent.Type.Hide:
+            for group, win in self._windows.items():
+                if win is watched:
+                    self.registry.clear_group(group)
+        return False
 
     @Slot()
     def sync(self) -> None:
+        frames = {g: (TARGET_LAYERS.get(g, DEFAULT_LAYER), to_physical(w.frameGeometry(), device_ratio(w)))
+                  for g, w in self._windows.items() if w.isVisible()}
         for group, win in list(self._windows.items()):
             self.registry.clear_group(group)
             if not win.isVisible():
                 continue
+            layer = TARGET_LAYERS.get(group, DEFAULT_LAYER)
+            in_front = [r for g, (lay, r) in frames.items() if g != group and lay > layer]
             ratio = device_ratio(win)
             for i, btn in enumerate(win.findChildren(QAbstractButton)):
                 if not btn.isVisible() or not btn.isEnabled():
                     continue
-                top_left = btn.mapToGlobal(QPoint(0, 0))
-                rect = to_physical(QRect(top_left, btn.size()), ratio)
+                seen = btn.visibleRegion().boundingRect()  # the part not clipped by a scroll area
+                if seen.isEmpty():
+                    continue
+                top_left = btn.mapToGlobal(seen.topLeft())
+                rect = to_physical(QRect(top_left, seen.size()), ratio)
+                if any(covered_fraction(rect, f) > HIDDEN_FRACTION for f in in_front):
+                    continue
                 key = f"{group}:{btn.objectName() or i}:{id(btn)}"
-                self.registry.register(GazeTarget(key, rect, self.bridge.later(btn.click), group))
+                self.registry.register(GazeTarget(key, rect, self.bridge.later(btn.click), group,
+                                                  repeat=bool(btn.property("gaze_repeat")),
+                                                  dwell_factor=float(btn.property("gaze_dwell_factor") or 1.0),
+                                                  layer=layer))

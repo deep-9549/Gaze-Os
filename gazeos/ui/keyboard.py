@@ -9,9 +9,17 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
-from gazeos.text_entry.layouts import Key, Layout, key_unit_px
+from gazeos.text_entry.layouts import Key, Layout, key_unit_px, symbols_layout
 from gazeos.text_entry.phrases import PhraseBank
 from gazeos.text_entry.session import TypingSession
 from gazeos.text_entry.tts import Speaker
@@ -28,22 +36,37 @@ class KeyboardWindow(QWidget):
         on_close: Callable[[], None],
         theme_name: str = "default",
         num_predictions: int = 4,
+        on_aim: Callable[[], None] | None = None,
+        key_repeat: bool = False,
+        key_dwell_factor: float = 1.0,
+        keep_clear: tuple[int, int, int] = (0, 0, 0),
     ) -> None:
         super().__init__(None, panel_flags())
         self.session = session
         self.phrases = phrases
         self.speaker = speaker
         self.on_close = on_close
+        self.on_aim = on_aim  # "Fix cursor": re-aim with one dot
+        self.key_repeat = key_repeat  # keep looking at a key to type it again (settings: off)
+        self.key_dwell_factor = key_dwell_factor  # dwell on a key, as a multiple of the user's
+        # Screen strips (left, right, bottom; logical px) the keyboard stays out of: the side bar.
+        # Over it, the bar's buttons sat under the keys at the keyboard's edge (18 Nov 2026).
+        self.keep_clear = keep_clear
         self.num_predictions = num_predictions
         self.last_gaze_px: tuple[int, int] | None = None
         self.setStyleSheet(stylesheet(theme_name))
         self.unit = 0.0
         self.error_radius_px = error_radius_px
+        self.current_layout = session.layout  # what the keys show: the letters or a page of symbols
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
         self.preview = QLabel("")
         self.preview.setProperty("role", "muted")
+        # The keys set the keyboard's width; long text or long predictions are cut instead of
+        # widening it over the side bar.
+        loose = (QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.preview.setSizePolicy(*loose)
         root.addWidget(self.preview)
         pred_row = QHBoxLayout()
         self.pred_buttons: list[QPushButton] = []
@@ -51,11 +74,17 @@ class KeyboardWindow(QWidget):
             b = QPushButton("")
             b.setObjectName(f"pred{i}")
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            # A longer look: a prediction inserts a whole word, and the eye passes over the
+            # predictions to read them and the text above them.
+            b.setProperty("gaze_dwell_factor", 1.5)
+            b.setSizePolicy(*loose)
             b.clicked.connect(lambda _=False, idx=i: self._choose(idx))
             pred_row.addWidget(b)
             self.pred_buttons.append(b)
         self.sentence_button = QPushButton("")
         self.sentence_button.setObjectName("sentence")
+        self.sentence_button.setProperty("gaze_dwell_factor", 1.5)
+        self.sentence_button.setSizePolicy(*loose)
         self.sentence_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.sentence_button.clicked.connect(self._choose_sentence)
         self.sentence_button.hide()
@@ -73,19 +102,37 @@ class KeyboardWindow(QWidget):
     # -- layout ----------------------------------------------------------------
     def build(self, layout: Layout, error_radius_px: float) -> None:
         for b in self.key_buttons.values():
+            b.hide()  # hidden buttons are not gaze targets; deleted once the click that called this returns
             b.deleteLater()
         self.key_buttons.clear()
+        self.current_layout = layout
         ratio = device_ratio(self)
         self.error_radius_px = error_radius_px
         screen = QGuiApplication.primaryScreen()
-        avail_w = screen.availableGeometry().width() if screen else 1280
-        unit = key_unit_px(error_radius_px / ratio)
-        unit = min(unit, (avail_w - 40) / layout.width)  # fit on screen; large6 for low accuracy
+        avail = screen.availableGeometry() if screen else None
+        left, right, bottom = self.keep_clear
+        avail_w = (avail.width() if avail else 1280) - left - right
+        avail_h = (avail.height() if avail else 720) - bottom
+        # As large as the screen allows, whatever the calibration score: the score is measured
+        # with the head still, right after calibrating, and typing error was 2-3 times larger
+        # (18 Nov 2026). Sized from the score, a good calibration (0.5 cm) gave 12 mm keys whose
+        # labels no longer fit. Up to 85% of the screen height, less the prediction strip.
+        unit = min((avail_w - 40) / layout.width, (0.85 * avail_h - 130) / layout.height)
+        unit = max(unit, key_unit_px(error_radius_px / ratio))  # never smaller than 2.5x the error
+        unit = min(unit, (avail_w - 40) / layout.width)  # but always on screen
         self.unit = unit
         self.keys_host.setFixedSize(int(layout.width * unit), int(layout.height * unit))
         for key in layout.keys:
-            b = QPushButton(key.label, self.keys_host)
+            b = QPushButton(key.label.replace("&", "&&"), self.keys_host)  # a lone & marks a shortcut
             b.setObjectName(f"key_{key.id}")
+            if self.key_repeat and (key.letters or key.text or key.id in ("space", "backspace")):
+                b.setProperty("gaze_repeat", True)  # keep looking to type it again
+            if key.id in ("enter", "close"):
+                # Enter sends forms and messages, Close takes the keyboard away: a longer look
+                b.setProperty("gaze_dwell_factor", max(1.5, self.key_dwell_factor))
+            elif self.key_dwell_factor != 1.0:
+                # Time to see the ring start on the wrong key and look away before it presses
+                b.setProperty("gaze_dwell_factor", self.key_dwell_factor)
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             b.setGeometry(int(key.x * unit) + 2, int(key.y * unit) + 2, int(key.w * unit) - 4, int(key.h * unit) - 4)
             b.clicked.connect(lambda _=False, k=key: self._press(k))
@@ -99,7 +146,8 @@ class KeyboardWindow(QWidget):
         if screen is None:
             return
         g = screen.availableGeometry()
-        self.move(g.left() + (g.width() - self.width()) // 2, g.bottom() - self.height())
+        left, right, bottom = self.keep_clear
+        self.move(g.left() + left + (g.width() - left - right - self.width()) // 2, g.bottom() - bottom - self.height())
 
     def showEvent(self, event: object) -> None:  # noqa: N802
         super().showEvent(event)  # type: ignore[arg-type]
@@ -126,7 +174,16 @@ class KeyboardWindow(QWidget):
         if key.id == "close":
             self.on_close()
             return
-        if key.id == "numbers":
+        if key.id == "aim":
+            if self.on_aim is not None:
+                self.on_aim()
+            return
+        if key.id in ("numbers", "symbols"):  # "123" and "#+=": the pages of digits and symbols
+            page = 1 if key.id == "symbols" else 0
+            self.build(symbols_layout(self.session.layout, page), self.error_radius_px)
+            return
+        if key.id == "letters":  # "ABC": back to the letters the user came from
+            self.build(self.session.layout, self.error_radius_px)
             return
         point = self._gaze_in_key_units() if key.letters else None
         self.session.press(key, point)

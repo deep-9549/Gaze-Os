@@ -46,25 +46,40 @@ class DwellClicker:
         (used when the magnifier opens right where the last dwell fired)."""
         self._fired_point = None
 
+    def restart(self) -> None:
+        """Start a new dwell where the gaze is, even on the spot that just fired (key repeat)."""
+        self.state = ControlState.IDLE
+        self._anchor = None
+        self._fired_point = None
+
+    def forget_if_left(self, xy: FloatArray) -> None:
+        """The gaze is at `xy`: once it is away from the spot that last fired, that spot may
+        fire again. Called by `update`, and by the engine where it does not dwell (paused)."""
+        if self._fired_point is not None and float(np.linalg.norm(np.asarray(xy) - self._fired_point)) > self.radius_px:
+            self._fired_point = None
+
+    def hold(self, seconds: float) -> None:
+        """Do not count `seconds` toward the dwell (no valid gaze sample arrived in that time)."""
+        self._start += seconds
+
     def update(self, t: float, xy: FloatArray, enabled: bool = True) -> DwellUpdate:
         xy = np.asarray(xy, dtype=np.float64)
         if not enabled:
             self.reset()
             return DwellUpdate(self.state, 0.0)
 
+        if self.state in (ControlState.FIRED, ControlState.COOLDOWN) and t - self._fired_at < self.cooldown_s:
+            self.state = ControlState.COOLDOWN
+            return DwellUpdate(self.state, 0.0)
+        self.forget_if_left(xy)
+        if self._fired_point is not None:
+            # Stay in cooldown until the gaze leaves the spot that just fired, so a long stare
+            # does not click again and again. This holds across a reset too: Pause pressed by a
+            # dwell pauses, the pause resets the dwell, and the same stare must not press Pause
+            # again 0.8 s later (it flipped between paused and resumed, 18 Nov 2026).
+            self.state = ControlState.COOLDOWN
+            return DwellUpdate(self.state, 0.0)
         if self.state in (ControlState.FIRED, ControlState.COOLDOWN):
-            near_fired = (
-                self._fired_point is not None
-                and float(np.linalg.norm(xy - self._fired_point)) <= self.radius_px
-            )
-            if t - self._fired_at < self.cooldown_s:
-                self.state = ControlState.COOLDOWN
-                return DwellUpdate(self.state, 0.0)
-            if near_fired:
-                # Stay in cooldown until the gaze leaves the spot that just fired,
-                # so a long stare does not click again and again.
-                self.state = ControlState.COOLDOWN
-                return DwellUpdate(self.state, 0.0)
             self.state = ControlState.IDLE
             self._anchor = None
 

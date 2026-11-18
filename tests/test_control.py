@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from gazeos.calibration.implicit import ImplicitRecalibrator
+from gazeos.calibration.personalization import NoPersonalization
 from gazeos.calibration.protocol import GazeObservation
 from gazeos.control.dwell import DwellClicker
 from gazeos.control.engine import Action, ControlEngine, EngineInput
@@ -76,8 +78,32 @@ def test_fixation_detector(rng) -> None:
     for i, p in enumerate(_jitter(rng, 30, sigma=5.0)):
         events.append(det.update(i / 30, p, p).event)
     assert EyeEvent.FIXATION in events
-    out = det.update(31 / 30, np.array([1500.0, 400.0]), np.array([1500.0, 400.0]))
+    # A 9 degree jump needs a second frame (one frame could be noise); the filter trails it.
+    near, lagging = np.array([500.0 + 9 * 58.0, 400.0]), np.array([550.0, 400.0])
+    assert not det.update(31 / 30, near, lagging).saccade_started
+    out = det.update(32 / 30, near, lagging)
     assert out.event == EyeEvent.SACCADE and out.saccade_started
+    # A 15 degree jump cannot be noise and moves the cursor at once.
+    far = near + np.array([15 * 58.0, 0.0])
+    assert det.update(33 / 30, far, near).saccade_started
+
+
+def test_webcam_noise_is_not_a_saccade() -> None:
+    """Regression: with the gaze noise measured on the laptop webcam (1.1 deg x 2.45 deg
+    per frame) the old 30 deg/s rule called a third of all frames a saccade, and each
+    one reset the filter, so the cursor was not smoothed at all."""
+    ppd = 58.0
+    rng = np.random.default_rng(0)
+    filt = OneEuroFilter(units_per_px=1 / ppd)
+    det = FixationDetector(px_per_deg=ppd)
+    resets = 0
+    for i in range(900):  # 30 s at 30 fps
+        raw = np.array([960.0, 540.0]) + rng.normal(0, 1, 2) * np.array([1.10, 2.45]) * ppd
+        if det.update(i / 30, raw, filt(i / 30, raw)).saccade_started:
+            resets += 1
+            filt.reset()
+            filt(i / 30, raw)
+    assert resets <= 3
 
 
 def test_dwell_state_machine() -> None:
@@ -278,3 +304,53 @@ def test_engine_rest_reminder(settings, geometry) -> None:
         t += 1 / 30
         events += eng.update(EngineInput(t, None, OK)).events
     assert "rest_reminder" in events
+
+
+def test_old_profile_with_velocity_rule_still_loads() -> None:
+    from gazeos.settings import Settings
+
+    s = Settings.model_validate({"fixation": {"saccade_velocity_deg_s": 30.0, "dispersion_deg": 1.0}})
+    assert s.fixation.saccade_jump_deg == 7.0
+
+
+def test_fixation_dead_band_holds_the_cursor_still(rng) -> None:
+    """With webcam-like noise the held point stops trembling, and a real move still moves it."""
+    det = FixationDetector(px_per_deg=58.0, hold_deadband_deg=0.75, hold_ease=0.3, hold_lock_after_s=0.3)
+    pts = []
+    for i, p in enumerate(_jitter(rng, 60, sigma=12.0)):
+        pts.append(det.update(i / 30, p, p).point)
+    held = np.stack(pts[20:])
+    assert np.mean(np.linalg.norm(np.diff(held, axis=0), axis=1) == 0) > 0.8  # still in most frames
+    moved = [det.update((60 + i) / 30, np.array([560.0, 400.0]), np.array([560.0, 400.0])).point for i in range(30)]
+    assert np.linalg.norm(moved[-1] - np.array([560.0, 400.0])) < 5
+
+
+def test_typing_leaves_the_calibration_alone_by_default(settings, geometry) -> None:
+    """A gaze-typed key is labelled by the tracker's own cursor, so learning from it locked
+    in the tracker's error (ADR 0009); implicit recalibration only runs when enabled."""
+    pressed = []
+    reg = TargetRegistry()
+    reg.register(GazeTarget("kb:key_a", Rect(600, 400, 260, 200), lambda: pressed.append("a")))
+    reg.register(GazeTarget("kb:key_b", Rect(1100, 400, 260, 200), lambda: pressed.append("b")))
+    rec = ImplicitRecalibrator(NoPersonalization(geometry), [], refit_every=1, background=False)
+    eng = ControlEngine(settings, geometry, RecordingBackend(), registry=reg, recalibrator=rec)
+    _, t = _run(eng, (700, 500), 1.5)
+    assert pressed == ["a"] and rec.implicit == []
+    settings.calibration.implicit_enabled = True
+    _run(eng, (1200, 500), 1.5, t0=t)
+    assert pressed == ["a", "b"] and rec.implicit
+
+
+def test_dwell_counts_per_key_on_large_gazeos_targets(settings, geometry) -> None:
+    """Wandering inside a large key (further than the 1.5 deg dwell radius from where the
+    dwell began) used to restart the ring; on GazeOS's own targets it now keeps counting."""
+    pressed = []
+    reg = TargetRegistry()
+    reg.register(GazeTarget("kb:key_a", Rect(600, 400, 260, 200), lambda: pressed.append("a")))
+    eng, _ = _engine(settings, geometry, registry=reg)
+    t = 0.0
+    for i in range(36):  # 1.2 s, alternating between two spots 150 px apart inside the key
+        t += 1 / 30
+        x = 650 if (i // 6) % 2 == 0 else 800
+        eng.update(EngineInput(t, _obs((x, 500)), OK))
+    assert pressed == ["a"]

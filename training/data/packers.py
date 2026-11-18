@@ -2,6 +2,7 @@
 
     python -m training.data.packers mpiifacegaze /path/to/MPIIFaceGaze data/shards/mpiifacegaze
     python -m training.data.packers ethxgaze     /path/to/xgaze_224/train  data/shards/ethxgaze --stride 3
+    python -m training.data.packers rtgene       data/raw/rtgene           data/shards/rtgene
     python -m training.data.packers gazeos       /path/to/recordings       data/shards/gazeos_webcam
     python -m training.data.packers synthetic    -                          data/shards/synthetic
 
@@ -50,9 +51,9 @@ def pack_mpiifacegaze(root: str, out_dir: str) -> list[Path]:
             if img is None:
                 continue
             img = cv2.cvtColor(cv2.undistort(img, K.matrix, K.dist), cv2.COLOR_BGR2RGB)
-            vals = np.asarray(parts[1:], float)
+            vals = np.asarray(parts[1:27], float)  # the last column names the evaluation eye ("left"/"right")
             lm = vals[2:14].reshape(6, 2)  # 4 eye corners, 2 mouth corners
-            rvec, tvec = vals[14:17], vals[17:20]
+            rvec = vals[14:17]  # head translation (vals[17:20]) is not needed: fc gives the face centre
             fc, gt = vals[20:23], vals[23:26]
             R, _ = cv2.Rodrigues(rvec)
             K0 = CameraIntrinsics(K.matrix, np.zeros(5))
@@ -95,6 +96,84 @@ def pack_ethxgaze(root: str, out_dir: str, stride: int = 1) -> list[Path]:
                 w.add(face, right, left, (float(hp[0]), float(hp[1]), 0.0), f["face_gaze"][j], sid)
         w.close({"dataset": "ETH-XGaze", "source": Path(path).name, "stride": stride})
         outs.append(out)
+    return outs
+
+
+RTGENE_SUBJECT_OFFSET = 2000
+# (pitch, yaw) signs of the head pose relative to the shard convention; checked after
+# packing (docs/PLAN.md step 16).
+RTGENE_HEAD_SIGN = (1.0, 1.0)
+
+
+def _rtgene_labels(text: str) -> dict[int, tuple[float, float, float, float]]:
+    """`frame, [head A, head B], [gaze A, gaze B], timestamp` -> {frame: (A_h, B_h, A_g, B_g)}.
+
+    A is yaw and B is pitch (verified on extreme-gaze frames): gaze B > 0 looks up,
+    gaze A < 0 looks toward image-right, the same convention as `vector_to_pitchyaw`.
+    """
+    out = {}
+    for line in text.splitlines():
+        parts = [p.strip(" []") for p in line.split(",")]
+        if len(parts) >= 5 and parts[0].isdigit():
+            out[int(parts[0])] = (float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4]))
+    return out
+
+
+def pack_rtgene(root: str, out_dir: str, stride: int = 1, max_abs_deg: float = 42.0) -> list[Path]:
+    """RT-GENE: one `sNNN_glasses.tar` per subject, read in a single sequential pass.
+
+    Uses the inpainted 224x224 face and 60x36 eye crops. The `right`/`left`
+    folders are the subject's own eyes (template matching puts `right` on the
+    image-left side), so `left` is mirrored like every other packer's left eye.
+    Frames whose gaze falls outside the bin range (±42°) are dropped.
+    """
+    import tarfile
+
+    from gazeos.vision.enhance import apply_clahe
+
+    def decode(data: bytes, flags: int) -> np.ndarray:
+        return cv2.imdecode(np.frombuffer(data, np.uint8), flags)
+
+    limit = np.radians(max_abs_deg)
+    outs = []
+    for path in sorted(glob.glob(os.path.join(root, "s[0-9][0-9][0-9]_*.tar"))):
+        name = Path(path).stem
+        sid = RTGENE_SUBJECT_OFFSET + int(name[1:4])
+        out = Path(out_dir) / f"rtgene_{name}.h5"
+        dropped = 0
+        with tarfile.open(path) as t:
+            members = t.getmembers()
+            label_member = next(m for m in members if m.name.endswith("/label_combined.txt"))
+            labels = _rtgene_labels(t.extractfile(label_member).read().decode())  # type: ignore[union-attr]
+            keep = set(sorted(labels)[::stride])
+            # Eyes come before faces in the archives; whichever arrives first waits here.
+            parts: dict[int, dict[str, bytes]] = {}
+            w = ShardWriter(out)
+            for m in members:
+                pieces = m.name.split("/")
+                if len(pieces) != 4 or pieces[1] != "inpainted" or pieces[2] not in ("face", "left", "right"):
+                    continue
+                fid = int(pieces[3].split("_")[1])
+                if fid not in keep:
+                    continue
+                got = parts.setdefault(fid, {})
+                got[pieces[2]] = t.extractfile(m).read()  # type: ignore[union-attr]
+                if len(got) < 3:
+                    continue
+                del parts[fid]
+                head_a, head_b, gaze_a, gaze_b = labels[fid]
+                if abs(gaze_a) > limit or abs(gaze_b) > limit:
+                    dropped += 1
+                    continue
+                face = cv2.cvtColor(decode(got["face"], cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+                right = apply_clahe(decode(got["right"], cv2.IMREAD_GRAYSCALE))
+                left = apply_clahe(np.ascontiguousarray(cv2.flip(decode(got["left"], cv2.IMREAD_GRAYSCALE), 1)))
+                head = (RTGENE_HEAD_SIGN[0] * head_b, RTGENE_HEAD_SIGN[1] * head_a, 0.0)
+                w.add(face, right, left, head, (gaze_b, gaze_a), sid)
+        w.close({"dataset": "RT-GENE", "source": Path(path).name, "subject": sid, "stride": stride,
+                 "dropped_out_of_range": dropped, "incomplete_frames": len(parts)})
+        outs.append(out)
+        log.info("%s: %d samples (%d out of range, %d without all three images)", name, w.n, dropped, len(parts))
     return outs
 
 
@@ -169,7 +248,7 @@ def synthetic_images(gaze: np.ndarray, head: np.ndarray, skin: np.ndarray, rng: 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     p = argparse.ArgumentParser()
-    p.add_argument("dataset", choices=["mpiifacegaze", "ethxgaze", "gazeos", "synthetic"])
+    p.add_argument("dataset", choices=["mpiifacegaze", "ethxgaze", "rtgene", "gazeos", "synthetic"])
     p.add_argument("root")
     p.add_argument("out")
     p.add_argument("--stride", type=int, default=1)
@@ -178,6 +257,8 @@ def main() -> None:
         outs = pack_mpiifacegaze(a.root, a.out)
     elif a.dataset == "ethxgaze":
         outs = pack_ethxgaze(a.root, a.out, a.stride)
+    elif a.dataset == "rtgene":
+        outs = pack_rtgene(a.root, a.out, a.stride)
     elif a.dataset == "gazeos":
         outs = pack_gazeos(a.root, a.out)
     else:

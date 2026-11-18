@@ -73,6 +73,27 @@ class EngineOutput:
 
 
 class ControlEngine:
+    # Frames without a gaze sample, by cause. Tracking lost (no face, more than one face, too
+    # far, head turned away) or eyes closed: the time does not count toward a dwell, and
+    # after MAX_DWELL_GAP_S of it the dwell starts again, so a dwell can never finish on the
+    # first frame back. Face tracked with the eyes open but the sample dropped by the lid gate
+    # (lids lowered to look at the lower screen, a blink starting): the user is still looking
+    # where they were, so the time counts, for up to MAX_LID_GAP_S at a stretch. Not counting
+    # it froze the dwell on the lower keyboard rows, where the lid gate dropped 13-78% of the
+    # frames (18 Nov 2026 traces).
+    MAX_DWELL_GAP_S = 0.6
+    MAX_LID_GAP_S = 1.5
+    # GazeOS buttons that still respond while paused (registry keys start with these).
+    RESUME_TARGETS = ("action_bar:pause:", "menu:menu_pause:")
+    # While a window of one of these groups is on screen (a yes/no question: Quit? Close the
+    # window?), only its buttons respond. On 18 Nov 2026 a glance on the way to "Yes, quit"
+    # pressed Debug view in the menu behind the question.
+    MODAL_GROUPS = ("confirm",)
+    # A repeatable GazeOS target (typing keys) fires again when the gaze stays on it this long
+    # after it fired, plus a full dwell: 0.7 + 0.8 = 1.5 s. On 18 Nov the gaze left a key a
+    # median 0.3 s after it fired, and stayed over 1.5 s once in 90 presses (on Del).
+    REPEAT_AFTER_S = 0.7
+
     def __init__(
         self,
         settings: Settings,
@@ -93,17 +114,14 @@ class ControlEngine:
         self.drift = DriftCorrector()
         self.history = GazeHistory()
         self.px_per_deg = geometry.deg_to_px(1.0)
-        self.filter: PointFilter = make_filter(settings.filter, self.px_per_deg)
-        self.fixation = FixationDetector(
-            self.px_per_deg,
-            settings.fixation.saccade_velocity_deg_s,
-            settings.fixation.dispersion_deg,
-            settings.fixation.min_fixation_ms,
-        )
-        self.dwell = DwellClicker(
-            settings.dwell.dwell_ms, settings.dwell.radius_deg * self.px_per_deg, settings.dwell.cooldown_ms
-        )
-        self.snapper = TargetSnapper(settings.snap.probability_threshold, settings.snap.radius_sigmas)
+        self._dwell_target: GazeTarget | None = None
+        self._last_valid_t: float | None = None  # time of the last valid gaze sample
+        self._prev_t: float | None = None  # time of the previous frame of any kind
+        self._lost_run = 0.0  # seconds without a sample because tracking was lost or the eyes closed
+        self._lid_run = 0.0  # seconds without a sample because the lid gate dropped it
+        self._repeat_key: str | None = None  # the GazeOS target that fired last, and when
+        self._repeat_t = 0.0
+        self._build(settings)
         self.action = Action.LEFT
         self.dragging = False
         self.paused = False
@@ -120,7 +138,45 @@ class ControlEngine:
         self.error_px = settings.dwell.radius_deg * self.px_per_deg  # updated after validation
         self.event_log: list[tuple[float, str]] = []
 
+    def _build(self, settings: Settings) -> None:
+        """The parts that copy values out of the settings when they are made."""
+        self.filter: PointFilter = make_filter(settings.filter, self.px_per_deg)
+        self.fixation = FixationDetector(
+            self.px_per_deg,
+            saccade_jump_deg=settings.fixation.saccade_jump_deg,
+            dispersion_deg=settings.fixation.dispersion_deg,
+            min_fixation_ms=settings.fixation.min_fixation_ms,
+            confirm_frames=settings.fixation.saccade_confirm_frames,
+            hold_deadband_deg=settings.fixation.hold_deadband_deg,
+            hold_ease=settings.fixation.hold_ease,
+            hold_lock_after_s=settings.fixation.hold_lock_after_ms / 1000.0,
+        )
+        self.dwell = DwellClicker(
+            settings.dwell.dwell_ms, settings.dwell.radius_deg * self.px_per_deg, settings.dwell.cooldown_ms
+        )
+        self.snapper = TargetSnapper(settings.snap.probability_threshold, settings.snap.radius_sigmas)
+
     # -- public controls -------------------------------------------------------
+    def apply_settings(self, settings: Settings) -> None:
+        """Saved settings take effect at once: the dwell clicker, filter, fixation detector
+        and snapper are rebuilt from them (they keep their own copies of the values)."""
+        self.s = settings
+        self._build(settings)
+        self._dwell_target = None
+
+    def release_inputs(self) -> None:
+        """Let go of everything the engine may be holding or about to do: a held mouse
+        button, a running dwell, an open magnifier. Called on pause, before calibration,
+        on exit and when the camera stops. A click by blink needs a fresh gaze sample after."""
+        if self.dragging:
+            self._end_drag()
+        self.dwell.reset()
+        self._dwell_target = None
+        self.zoom = None
+        self._frozen = None
+        self._last_valid_t = None
+        self._lost_run = self._lid_run = 0.0
+
     def set_action(self, action: Action) -> None:
         if self.dragging and action != Action.DRAG:
             self._end_drag()
@@ -130,12 +186,9 @@ class ControlEngine:
         self.set_paused(not self.paused, reason)
 
     def set_paused(self, paused: bool, reason: str = "user") -> None:
-        if paused and self.dragging:
-            self._end_drag()
+        self.release_inputs()
         self.paused = paused
         self.auto_paused = paused and reason == "face_lost"
-        self.dwell.reset()
-        self.zoom = None
         self._log(0.0, f"{'pause' if paused else 'resume'}:{reason}")
 
     def emergency_stop(self) -> None:
@@ -198,8 +251,27 @@ class ControlEngine:
         else:
             self._frozen = None
 
+        dt = 0.0 if self._prev_t is None else max(t - self._prev_t, 0.0)
+        self._prev_t = t
         if point is not None:
+            self._last_valid_t = t
+            self._lost_run = self._lid_run = 0.0
             self.cursor = point
+        elif q.ok and not (inp.eyes_closed or q.eye_closed):
+            # Face tracked, eyes open, sample dropped by the lid gate: the time counts. A gap
+            # this long means the gaze could be anywhere by now (looking down at the lap):
+            # the dwell starts again.
+            self._lid_run += dt
+            if self._lid_run > self.MAX_LID_GAP_S:
+                self.dwell.reset()
+                self._dwell_target = None
+        else:
+            # Tracking lost or eyes closed: does not count; a long loss starts the dwell again.
+            self.dwell.hold(dt)
+            self._lost_run += dt
+            if self._lost_run > self.MAX_DWELL_GAP_S:
+                self.dwell.reset()
+                self._dwell_target = None
         cursor = self._frozen if self._frozen is not None else self.cursor
 
         # Corners: top-right opens the menu, top-left toggles pause.
@@ -219,7 +291,7 @@ class ControlEngine:
                 if self.dragging:
                     events.append("dragging")
             # Clicking from blinks and gestures, at the frozen point.
-            fired_by = self._discrete_click(inp, cursor, t)
+            fired_by = self._discrete_click(inp, cursor, t, self._trusted(q, t))
             if fired_by:
                 events.append(fired_by)
             # Scrolling zones.
@@ -228,12 +300,44 @@ class ControlEngine:
             # Dwell.
             dwell_enabled = self.s.dwell.enabled and self.s.mode != ControlMode.HYBRID
             if point is not None and dwell_enabled and not self._in_scroll_zone(cursor):
-                upd = self.dwell.update(t, cursor)
-                state, progress = upd.state, upd.progress
-                if upd.fired and upd.anchor is not None:
-                    events.append(self._fire(upd.anchor, t, source="dwell"))
+                dwell_point = self._dwell_point(cursor)
+                tgt = self._dwell_target
+                groups = {t.group for t in self.registry.all()}
+                if ((groups & set(self.MODAL_GROUPS) and (tgt is None or tgt.group not in self.MODAL_GROUPS))
+                        or (tgt is None and "keyboard" in groups and not self.s.typing.clicks_outside_keyboard)):
+                    # A question is on screen: nothing behind or around it is pressed or clicked.
+                    # The keyboard is open: GazeOS buttons respond, the rest of the screen (the
+                    # text being typed) is not clicked.
+                    self.dwell.reset()
+                    self.dwell.forget_if_left(cursor)
+                    state, progress = ControlState.IDLE, 0.0
+                else:
+                    self.dwell.dwell_s = self.s.dwell.dwell_ms / 1000.0 * (tgt.dwell_factor if tgt is not None else 1.0)
+                    if (tgt is not None and tgt.repeat and tgt.key == self._repeat_key
+                            and self.dwell.state in (ControlState.FIRED, ControlState.COOLDOWN)
+                            and t - self._repeat_t >= self.REPEAT_AFTER_S):
+                        self.dwell.restart()  # still on the key that just fired: type it again
+                    upd = self.dwell.update(t, dwell_point)
+                    state, progress = upd.state, upd.progress
+                    if upd.fired and upd.anchor is not None:
+                        events.append(self._fire(upd.anchor, t, source="dwell"))
             elif point is None:
                 state = self.dwell.state
+        elif self.paused and cursor is not None and point is not None:
+            # While paused only the Pause buttons respond, so a user without hands can resume
+            # by looking at Pause where they paused (the top-left corner works too). Nothing
+            # else is pressed, clicked or typed.
+            target = self.registry.hit(float(cursor[0]), float(cursor[1]))
+            if target is not None and target.key.startswith(self.RESUME_TARGETS):
+                self.dwell.dwell_s = self.s.dwell.dwell_ms / 1000.0 * target.dwell_factor
+                upd = self.dwell.update(t, np.asarray(target.rect.center, dtype=np.float64))
+                progress = upd.progress
+                if upd.fired:
+                    self._invoke_target(target, t)
+                    events.append(f"target:{target.key}")
+            else:
+                self.dwell.reset()
+                self.dwell.forget_if_left(cursor)  # looked away from Pause: it may be pressed again
         # Rest reminder every N minutes (PRD 7.7).
         period = self.s.system.rest_reminder_min * 60.0
         if period > 0 and t - self._start_t - self._last_rest_reminder >= period:
@@ -281,6 +385,23 @@ class ControlEngine:
         margin = self.px_per_deg  # within 1 degree of an edge, snap onto it
         point = magnetic_edges(point, self.geometry.width_px, self.geometry.height_px, margin)
         return point, sigma_px
+
+    def _dwell_point(self, cursor: FloatArray) -> FloatArray:
+        """Where the dwell clicker should see the cursor. On GazeOS's own targets (keys,
+        action bar) dwell counts per target: while the cursor stays on one it sees the
+        target's centre, so wandering inside a large key does not restart the ring; a
+        margin keeps the target through a one-frame wobble across its border."""
+        x, y = float(cursor[0]), float(cursor[1])
+        cur = self._dwell_target
+        if cur is not None:
+            r = cur.rect
+            m = min(self.s.dwell.target_margin_deg * self.px_per_deg, 0.25 * min(r.width, r.height))
+            if r.left - m <= x < r.left + r.width + m and r.top - m <= y < r.top + r.height + m:
+                return np.asarray(r.center, dtype=np.float64)
+        self._dwell_target = self.registry.hit(x, y)
+        if self._dwell_target is None:
+            return cursor
+        return np.asarray(self._dwell_target.rect.center, dtype=np.float64)
 
     def _head_fine_tune(self, point: FloatArray, obs: GazeObservation) -> FloatArray:
         head = np.asarray(obs.head_pyr[:2], dtype=np.float64)
@@ -332,7 +453,17 @@ class ControlEngine:
         self.backend.scroll(0, direction * self.s.scroll.step)
         return True
 
-    def _discrete_click(self, inp: EngineInput, cursor: FloatArray, t: float) -> str | None:
+    def _trusted(self, q: QualityReport, t: float) -> bool:
+        """May a blink or gesture act at the cursor? Only with one face in view and a valid
+        gaze sample recent enough to be from just before the blink."""
+        if q.status in (TrackingStatus.NO_FACE, TrackingStatus.MULTIPLE_FACES):
+            return False
+        if q.status == TrackingStatus.MOVE_CLOSER and not q.ok:  # too far to track (far but tracked is fine)
+            return False
+        limit = self.s.blink.long_blink_max_ms / 1000.0 + 0.5
+        return self._last_valid_t is not None and t - self._last_valid_t <= limit
+
+    def _discrete_click(self, inp: EngineInput, cursor: FloatArray, t: float, trusted: bool = True) -> str | None:
         mapping = self.s.gestures.mapping
         name: str | None = None
         if inp.blink_event in (BlinkEvent.LONG_BLINK, BlinkEvent.LEFT_WINK, BlinkEvent.RIGHT_WINK):
@@ -347,6 +478,11 @@ class ControlEngine:
         if action == "pause":
             self.toggle_pause("gesture")
             return "pause_toggle"
+        if action == "drag_toggle" and self.dragging:  # letting go is always allowed
+            self._end_drag()
+            return f"{name}:drag"
+        if not trusted:
+            return None
         if action == "drag_toggle":
             if self.dragging:
                 self._end_drag()
@@ -401,7 +537,9 @@ class ControlEngine:
                 assert decision.point is not None
                 x, y = decision.point
                 self.snapper.note_used(decision.element, t)
-            elif elements and (decision.element is None or decision.point is None):
+            elif elements:
+                # No confident target, or one smaller than the tracker's error: magnify
+                # instead of clicking where the cursor happens to be.
                 self.zoom = make_zoom_region(
                     (x, y), self.geometry.width_px, self.geometry.height_px,
                     self.s.snap.zoom_region_px, self.s.snap.zoom_factor,
@@ -429,6 +567,7 @@ class ControlEngine:
         return f"{source}:{action.value}"
 
     def _invoke_target(self, target: GazeTarget, t: float) -> None:
+        self._repeat_key, self._repeat_t = target.key, t
         try:
             target.callback()
         except Exception:

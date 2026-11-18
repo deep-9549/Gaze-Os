@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from gazeos.calibration.geometry import ScreenGeometry
 from gazeos.calibration.implicit import ImplicitRecalibrator
 from gazeos.calibration.personalization import Personalizer, load_personalizer, make_personalizer
+from gazeos.calibration.posture import PostureGuard
 from gazeos.calibration.protocol import CalibrationSample
 from gazeos.capture.camera import CaptureThread, OpenCVSource
 from gazeos.control.engine import Action, ControlEngine, EngineOutput
@@ -38,9 +39,10 @@ from gazeos.ui.debug_view import DebugView
 from gazeos.ui.keyboard import KeyboardWindow
 from gazeos.ui.onboarding import Onboarding
 from gazeos.ui.overlay import Overlay
-from gazeos.ui.panels import ButtonPanel, ConfirmPanel, PrivacyPanel
+from gazeos.ui.panels import ButtonPanel, ConfirmPanel, PrivacyPanel, global_rect
 from gazeos.ui.settings_dialog import SettingsDialog
 from gazeos.vision.head_pose import CameraIntrinsics
+from gazeos.vision.quality import LidDropMonitor
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +100,10 @@ class SimulatedCapture:
 
 
 class GazeOSApp(QObject):
+    # Quick fix (one dot) corrects drift; a larger offset means the user was not looking at the
+    # dot or has moved too far for one point, and applying it would make things worse.
+    QUICK_FIX_MAX_DEG = 4.0
+
     def __init__(self, args: object) -> None:
         super().__init__()
         self.args = args
@@ -127,6 +133,13 @@ class GazeOSApp(QObject):
         self.sync = TargetSync(self.registry, self.bridge)
         self.samples: list[CalibrationSample] = []
         self.personalizer = self._load_personalizer()
+        # Says when the user has moved away from where the calibration was made.
+        self.posture = PostureGuard()
+        self.lid_monitor = LidDropMonitor()  # says when the eyelids keep hiding the eyes
+        if self.profile.has_calibration():
+            origins = self.profile.load_calibration_features().get("origin")
+            if origins is not None and len(origins):
+                self.posture.set_reference(origins)
         self.recalibrator = ImplicitRecalibrator(
             self.personalizer, self.samples, self.settings.calibration.implicit_refit_every,
             self.settings.calibration.implicit_decay_min, on_refit=self._on_refit,
@@ -139,9 +152,14 @@ class GazeOSApp(QObject):
         self.calibration: CalibrationWindow | None = None
         self.keyboard: KeyboardWindow | None = None
         self.onboarding: Onboarding | None = None
-        self.logger = ExperimentLogger(self.profile.logs_dir) if self.settings.privacy.experiment_logging else None
+        self._confirm_panel: ConfirmPanel | None = None  # the open yes/no question, if any
+        # When the cursor was last aimed (a calibration or Fix cursor) in this run: a calibration
+        # saved in an earlier sitting does not count, so the first keyboard of a run re-aims.
+        self._last_aim_t: float | None = None
+        self.logger =ExperimentLogger(self.profile.logs_dir) if self.settings.privacy.experiment_logging else None
         self.heatmap = (HeatmapRecorder(self.geometry.width_px, self.geometry.height_px)
                         if self.settings.privacy.heatmaps else None)
+        self._start_predictor_loading()
         self._build_ui()
         self._start_threads()
         self._install_hotkeys()
@@ -156,6 +174,8 @@ class GazeOSApp(QObject):
                 log.exception("could not load calibration; starting uncalibrated")
         return make_personalizer(self.settings.calibration.method, self.geometry)
 
+    gaze_model_path: Path | None = None  # the model file in use ("auto" resolved)
+
     def _make_processor(self) -> FrameProcessor:
         gaze_model = gesture_model = None
         landmarker = None
@@ -163,14 +183,15 @@ class GazeOSApp(QObject):
             from gazeos.vision.landmarks import FaceLandmarker
 
             landmarker = FaceLandmarker()
-            model_path = Path(self.settings.gaze_model)
-            if model_path.exists():
-                from gazeos.inference.gaze import OnnxGazeEstimator
+            from gazeos.inference.gaze import OnnxGazeEstimator, resolve_gaze_model
 
+            model_path = resolve_gaze_model(self.settings.gaze_model)
+            self.gaze_model_path = model_path
+            if model_path is not None:
                 gaze_model = OnnxGazeEstimator(model_path)
                 log.info("gaze model: %s", model_path)
             else:
-                log.warning("gaze model %s not found; using the geometric M0 baseline", model_path)
+                log.warning("gaze model %s not found; using the geometric M0 baseline", self.settings.gaze_model)
         if self.settings.gesture_model and Path(self.settings.gesture_model).exists():
             from gazeos.inference.gesture import OnnxGestureClassifier
 
@@ -191,14 +212,14 @@ class GazeOSApp(QObject):
         self.debug = DebugView(self.intrinsics)
         self.menu = ButtonPanel("GazeOS", [
             ("Calibrate", "menu_calibrate", self.start_calibration),
-            ("Quick fix (1 point)", "menu_quick", lambda: self.start_calibration(quick=True)),
+            ("Fix cursor (1 dot)", "menu_quick", self.fix_cursor),
             ("Keyboard", "menu_keyboard", self.toggle_keyboard),
             ("Settings", "menu_settings", self._show_settings),
             ("Privacy", "menu_privacy", self._show_privacy),
             ("Debug view", "menu_debug", self._toggle_debug),
             ("Pause / resume", "menu_pause", self.toggle_pause),
-            ("Hide overlay", "menu_overlay", self._toggle_overlay),
-            ("Quit GazeOS", "menu_quit", self.quit),
+            ("Hide gaze cursor", "menu_overlay", self._toggle_overlay),
+            ("Quit GazeOS", "menu_quit", self._ask_quit),  # asks first; the tray's Quit (mouse) does not
         ], th)
         self.shortcuts = ButtonPanel("Shortcuts", [
             (label, f"sc_{name}", self._shortcut_runner(name))
@@ -207,7 +228,7 @@ class GazeOSApp(QObject):
                                 ("Close window", "close_window"), ("Start menu", "start_menu"),
                                 ("New tab", "new_tab"), ("Close tab", "close_tab"))
         ], th, columns=4)
-        for group, w in (("menu", self.menu), ("shortcuts", self.shortcuts)):
+        for group, w in (("menu", self.menu), ("shortcuts", self.shortcuts), ("debug", self.debug)):
             self.sync.track(group, w)
         self._tray()
         if not self.profile.has_calibration() and not self.simulate:
@@ -277,6 +298,11 @@ class GazeOSApp(QObject):
     @Slot(object)
     def _on_frame(self, packet: tuple[ProcessedFrame, EngineOutput | None, np.ndarray]) -> None:
         pf, out, image = packet
+        if out is not None and pf.pose is not None and self.calibration is None and not out.paused:
+            msg = self.posture.update(pf.result.t_capture, pf.pose.gaze_origin) or self.lid_monitor.update(
+                pf.result.t_capture, pf.result.lid_down, pf.result.quality_ok)
+            if msg:
+                self.overlay.show_toast(msg, 8)
         if out is not None:
             self.overlay.set_output(out)
             self.action_bar.set_action(out.action)
@@ -293,7 +319,8 @@ class GazeOSApp(QObject):
         self.debug.fps = getattr(self.worker, "fps", 0.0)
         self.debug.update_frame(pf, image)
         if self.onboarding is not None:
-            self.onboarding.update_frame(pf, image, self.processor.blinks.last_closure_ms)
+            self.onboarding.update_frame(pf, image, self.processor.blinks.last_closure_ms,
+                                         self.processor.blinks.last_closure_peak)
 
     def _handle_event(self, e: str) -> None:
         if e == "open_menu":
@@ -304,10 +331,12 @@ class GazeOSApp(QObject):
             self.overlay.show_toast("Face lost: tracking paused", 3)
         elif e == "auto_resume":
             self.overlay.show_toast("Face found: tracking resumed", 2)
+        elif e == "pause_toggle":
+            self._pause_toast()
         elif e == "zoom_open":
             self.overlay.show_toast("Zoom: look at your target again", 2)
         if self.recalibrator.drift_suspected():
-            self.overlay.show_toast("Accuracy dropped. Open the menu and choose Quick fix.", 5)
+            self.overlay.show_toast("Accuracy dropped. Look at Fix cursor (on the keyboard or in the menu).", 5)
             self.recalibrator.baseline_error_px = self.recalibrator.current_error_px()
 
     # -- actions -----------------------------------------------------------------
@@ -318,11 +347,21 @@ class GazeOSApp(QObject):
     def toggle_pause(self) -> None:
         with self.worker.with_engine():
             self.engine.toggle_pause("user")
+        self._pause_toast()
+
+    def _pause_toast(self) -> None:
+        """Say how to get back: while paused nothing responds except Pause itself."""
+        if self.engine.paused:
+            self.overlay.show_toast("Paused. To resume, look at Pause on the right-hand bar, "
+                                    "or at the top-left corner of the screen.", 6)
+        else:
+            self.overlay.show_toast("Resumed.", 2)
 
     def emergency_stop(self) -> None:
         with self.worker.with_engine():
             self.engine.emergency_stop()
-        self.overlay.show_toast("Emergency stop: all input stopped. Ctrl+Alt+P resumes.", 6)
+        self.overlay.show_toast("Emergency stop: all input stopped. To resume, look at Pause on the right-hand bar, "
+                                "or press Ctrl+Alt+P.", 6)
 
     def _confirm_destructive(self, name: str) -> bool:
         """Called from the engine thread: ask on the GUI thread, run the shortcut on Yes."""
@@ -332,13 +371,31 @@ class GazeOSApp(QObject):
                 self.backend.hotkey(*shortcut_keys(name, sys.platform))
 
         def ask() -> None:
-            question = f"Really {name.replace('_', ' ')}? Unsaved work may be lost."
-            self._confirm_panel = ConfirmPanel(question, run, self.settings.theme)
-            self.sync.track("confirm", self._confirm_panel)
-            self._confirm_panel.show()
+            words = name.replace("_", " ")
+            button = self.shortcuts.buttons.get(f"sc_{name}")
+            self._present_confirm(ConfirmPanel(
+                f"Really {words}? Unsaved work may be lost.", run, self.settings.theme, yes_label=f"Yes, {words}",
+                avoid=global_rect(button) if button is not None else None))
 
         self.bridge.call.emit(ask)
         return False
+
+    def _present_confirm(self, panel: ConfirmPanel) -> None:
+        """Show a yes/no question and make it gaze-operable; it replaces any open one."""
+        old = self._confirm_panel
+        if old is not None and old is not panel:
+            old.dismiss()
+        self._confirm_panel = panel
+        panel.show()
+        self.sync.track("confirm", panel)  # after show: its buttons are registered where they ended up
+
+    def _ask_quit(self) -> None:
+        """Quit from the gaze menu needs a separate Yes, placed away from the Quit button: a person
+        without hands cannot start GazeOS again. No answer within 10 s is No."""
+        self._present_confirm(ConfirmPanel(
+            "Quit GazeOS?", self.quit, self.settings.theme, yes_label="Yes, quit",
+            detail="Your eyes will no longer control the computer until GazeOS is started again.",
+            avoid=global_rect(self.menu.buttons["menu_quit"])))
 
     def _shortcut_runner(self, name: str) -> Callable[[], None]:
         def run() -> None:
@@ -348,32 +405,78 @@ class GazeOSApp(QObject):
 
     def _show_menu(self) -> None:
         self.menu.show()
+        self.menu.touch()  # asked for again while open: count its idle time from now
 
     def _show_shortcuts(self) -> None:
         self.shortcuts.show()
+        self.shortcuts.touch()
 
     def _toggle_overlay(self) -> None:
+        """Hide or show the gaze cursor. The dwell ring stays either way, so this item can be
+        found and pressed again by gaze; its label says what a press will do."""
         self.overlay.show_cursor = not self.overlay.show_cursor
+        self.menu.buttons["menu_overlay"].setText(
+            "Hide gaze cursor" if self.overlay.show_cursor else "Show gaze cursor")
 
     def _toggle_debug(self) -> None:
         self.debug.setVisible(not self.debug.isVisible())
 
+    def _build_predictor(self) -> Predictor:
+        """The word predictor. Loading the trained 3-gram takes about 3.5 s, so it runs on a
+        background thread from startup; on the UI thread it froze the screen when the keyboard
+        first opened (18 Nov 2026)."""
+        predictor = Predictor.default(
+            get_layout(self.settings.typing.layout), self.settings.typing.num_predictions,
+            ngram_path=Path("models/ngram_en.json"),
+            transformer_path=Path("models/lm_small.onnx") if self.settings.typing.use_transformer else None,
+        )
+        if self.settings.typing.use_llm:
+            predictor.llm = LocalLLM(self.settings.typing.llm_model)
+        if self.profile.dictionary_file.exists():
+            for line in self.profile.dictionary_file.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    predictor.trie.add(line.strip(), 5.0)
+        return predictor
+
+    def _start_predictor_loading(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gazeos-predictor")
+        self._predictor = pool.submit(self._build_predictor)
+        pool.shutdown(wait=False)
+        self._keyboard_waiting = False
+
+    def _open_keyboard_when_ready(self) -> None:
+        if not self._predictor.done():
+            QTimer.singleShot(200, self._open_keyboard_when_ready)
+            return
+        self._keyboard_waiting = False
+        self.toggle_keyboard()
+
     def toggle_keyboard(self) -> None:
         if self.keyboard is None:
+            if not self._predictor.done():
+                # Still loading: say so and open as soon as it is ready, instead of blocking
+                # the screen. Pressing Keyboard again meanwhile changes nothing.
+                if not self._keyboard_waiting:
+                    self._keyboard_waiting = True
+                    self.overlay.show_toast("Keyboard loading...", 2)
+                    QTimer.singleShot(200, self._open_keyboard_when_ready)
+                return
             layout = get_layout(self.settings.typing.layout)
-            predictor = Predictor.default(layout, self.settings.typing.num_predictions)
-            if self.settings.typing.use_llm:
-                predictor.llm = LocalLLM(self.settings.typing.llm_model)
-            if self.profile.dictionary_file.exists():
-                for line in self.profile.dictionary_file.read_text(encoding="utf-8").splitlines():
-                    if line.strip():
-                        predictor.trie.add(line.strip(), 5.0)
+            try:
+                predictor = self._predictor.result()
+            except Exception:
+                log.exception("word predictor failed to load; using the built-in word list")
+                predictor = Predictor.default(layout, self.settings.typing.num_predictions)
             session = TypingSession(layout, predictor, emit=self.engine.type_text,
                                     emit_key=lambda k: None if self.engine.paused else self.backend.hotkey(k))
             self.keyboard = KeyboardWindow(
                 session, PhraseBank(self.profile.phrases_file),
                 make_speaker(self.settings.typing.tts_engine, self.settings.typing.piper_voice),
                 self.engine.error_px, self.toggle_keyboard, self.settings.theme, self.settings.typing.num_predictions,
+                on_aim=self.fix_cursor, key_repeat=self.settings.typing.key_repeat,
+                key_dwell_factor=self.settings.typing.key_dwell_factor, keep_clear=self._side_bar_strip(),
             )
         if self.keyboard.isVisible():
             self.keyboard.hide()
@@ -381,9 +484,35 @@ class GazeOSApp(QObject):
         else:
             self.keyboard.show()
             self.sync.track("keyboard", self.keyboard)
+            if self._aim_is_stale():
+                QTimer.singleShot(300, self.fix_cursor)  # after the press that opened the keyboard
+
+    def _side_bar_strip(self) -> tuple[int, int, int]:
+        """The screen strip (left, right, bottom; logical px) the side bar takes, which the
+        keyboard keeps out of so that both stay usable."""
+        bar = self.action_bar
+        if not bar.isVisible():
+            return (0, 0, 0)
+        g = bar.frameGeometry()
+        return {"right": (0, g.width() + 8, 0), "left": (g.width() + 8, 0, 0)}.get(bar.dock, (0, 0, g.height() + 8))
+
+    def _aim_is_stale(self) -> bool:
+        """The cursor has not been aimed (calibration or Fix cursor) recently enough to type:
+        webcam gaze shifts with posture within minutes (settings: typing.auto_aim_after_s)."""
+        limit = self.settings.typing.auto_aim_after_s
+        if limit <= 0 or self.simulate or not self.profile.has_calibration():
+            return False
+        return self._last_aim_t is None or time.monotonic() - self._last_aim_t > limit
+
+    def fix_cursor(self) -> None:
+        """Re-aim with one dot in the centre (the quick calibration): corrects the offset the
+        cursor has drifted to since calibrating, in about 4 s, hands-free."""
+        if self.calibration is None:
+            self.start_calibration(quick=True)
 
     def _show_settings(self) -> None:
-        self._settings_dialog = SettingsDialog(self.settings, self._save_settings, self.settings.theme)
+        self._settings_dialog = SettingsDialog(self.settings, self._save_settings, self.settings.theme,
+                                               present=self._present_confirm)
         self.sync.track("settings", self._settings_dialog)
         self._settings_dialog.show()
 
@@ -399,10 +528,14 @@ class GazeOSApp(QObject):
         self.overlay.show_toast("Settings saved. Restart GazeOS to apply camera and model changes.", 4)
         self.settings = settings
         with self.worker.with_engine():
-            self.engine.s = settings
+            # Dwell time, filter, fixation, blink and quality values are copied into their
+            # objects when those are made, so they are remade here.
+            self.engine.apply_settings(settings)
+            self.processor.apply_settings(settings)
 
     def _show_privacy(self) -> None:
-        self._privacy = PrivacyPanel(self.profile, self._data_deleted, self.settings.theme)
+        self._privacy = PrivacyPanel(self.profile, self._data_deleted, self.settings.theme,
+                                     present=self._present_confirm)
         self.sync.track("privacy", self._privacy)
         self._privacy.show()
 
@@ -416,35 +549,54 @@ class GazeOSApp(QObject):
         self.sync.track("onboarding", self.onboarding)
         self.onboarding.show()
 
-    def _onboarding_done(self, threshold_ms: float | None) -> None:
+    def _onboarding_done(self, threshold_ms: float | None, closed_score: float | None = None) -> None:
         if threshold_ms is not None:
             self.settings.blink.long_blink_min_ms = threshold_ms
+        if closed_score is not None:
+            self.settings.blink.closed_score = closed_score
+        if threshold_ms is not None or closed_score is not None:
             self.profile.save_settings(self.settings)
         self.sync.untrack("onboarding")
         self.onboarding = None
 
     def start_calibration(self, quick: bool = False) -> None:
         with self.worker.with_engine():
+            self.engine.release_inputs()  # a drag or a running dwell must not outlive the engine
             self.worker.engine_enabled = False  # no clicks while calibrating
         p = self.personalizer if quick else make_personalizer(self.settings.calibration.method, self.geometry)
         self.calibration = CalibrationWindow(
             self.geometry, p, self.settings.calibration, self._calibration_done, self.settings.theme,
             quick=quick,
             current_predict=(lambda obs: self.engine.drift.apply(self.personalizer.predict_px(obs))) if quick else None,
+            keep_previous=self.profile.has_calibration(),
         )
         self.sync.track("calibration", self.calibration)
+        self.overlay.stay_on_top = False  # the dots, not the cursor, are what to look at
         self.calibration.showFullScreen()
 
     def _calibration_done(self, outcome: CalibrationOutcome | None) -> None:
         self.sync.untrack("calibration")
         self.calibration = None
+        self.overlay.stay_on_top = True
         with self.worker.with_engine():
             self.worker.engine_enabled = True
             if outcome is not None:
                 if outcome.quick_offset is not None:
-                    self.engine.drift.offset = self.engine.drift.offset + outcome.quick_offset
+                    limit = self.geometry.deg_to_px(self.QUICK_FIX_MAX_DEG)
+                    size_px = float(np.linalg.norm(outcome.quick_offset))
+                    if size_px <= limit:
+                        self.engine.drift.offset = self.engine.drift.offset + outcome.quick_offset
+                        self._last_aim_t = time.monotonic()
+                        if outcome.samples:  # "you have moved" now measures from here
+                            self.posture.set_reference(np.stack([s.obs.origin for s in outcome.samples]))
+                        cm = size_px * self.geometry.width_mm / self.geometry.width_px / 10.0
+                        self.overlay.show_toast(f"Cursor fixed (moved {cm:.1f} cm).", 3)
+                    else:  # not looking at the dot, or moved too far for a one-point fix
+                        self.overlay.show_toast("Fix cursor not applied: the correction it found was too large. "
+                                                "If you have moved, calibrate again.", 6)
                 else:
                     self._apply_calibration(outcome)
+                    self._last_aim_t = time.monotonic()
         if self.onboarding is not None:
             v = outcome.validation if outcome is not None and outcome.quick_offset is None else None
             self.onboarding.calibration_done(v.score if v else None, v.mean_deg if v else None)
@@ -452,6 +604,11 @@ class GazeOSApp(QObject):
             self.overlay.show_toast(f"Calibration score {outcome.validation.score}/100", 4)
 
     def _apply_calibration(self, outcome: CalibrationOutcome) -> None:
+        if self.gaze_model_path is not None and self.settings.gaze_model != str(self.gaze_model_path):
+            # A calibration fits one model's outputs: keep using that model ("auto" could pick
+            # another on a busier day, and the fit would no longer apply).
+            self.settings.gaze_model = str(self.gaze_model_path)
+            self.profile.save_settings(self.settings)
         self.personalizer = outcome.personalizer
         self.samples = outcome.samples
         self.engine.personalizer = self.personalizer
@@ -461,6 +618,7 @@ class GazeOSApp(QObject):
         self.recalibrator.base_samples = list(outcome.samples)
         self.recalibrator.baseline_error_px = outcome.validation.mean_px
         self.personalizer.save(self.profile.calibration_file)
+        self.posture.set_reference(np.stack([s.obs.origin for s in outcome.samples]))
         self.profile.save_calibration_features(
             pitchyaw=np.stack([s.obs.pitchyaw for s in outcome.samples]),
             origin=np.stack([s.obs.origin for s in outcome.samples]),
@@ -468,7 +626,7 @@ class GazeOSApp(QObject):
             target_px=np.stack([s.target_px for s in outcome.samples]),
         )
         if self.keyboard is not None:
-            self.keyboard.build(self.keyboard.session.layout, self.engine.error_px)
+            self.keyboard.build(self.keyboard.current_layout, self.engine.error_px)  # stay on the page shown
 
     def _on_refit(self, personalizer: Personalizer) -> None:
         self.bridge.call.emit(lambda: personalizer.save(self.profile.calibration_file))
@@ -483,8 +641,12 @@ class GazeOSApp(QObject):
 
     # -- lifecycle -----------------------------------------------------------------
     def quit(self) -> None:
+        with self.worker.with_engine():
+            self.engine.release_inputs()  # never exit with the mouse button held
+            self.worker.engine_enabled = False
         self.worker.stop()
         self.capture.stop()
+        self.worker.join(2.0)
         if self.logger is not None:
             self.logger.close()
         if self.heatmap is not None:

@@ -111,14 +111,20 @@ class KneserNeyTrigram:
 
     def next_words(self, context: Sequence[str], k: int = 5, prefix: str = "") -> list[tuple[str, float]]:
         ctx = [BOS, BOS, *context][-2:]
+
+        def top(counts: Counter[str], n: int) -> list[str]:
+            # Only the most frequent followers get scored: after "the" the trained model has
+            # about 11,000, and scoring them all took 1 s per suggestion.
+            if prefix:
+                return [w for w in counts if w.startswith(prefix)]
+            return [w for w, _ in counts.most_common(n)]
+
         candidates: set[str] = set()
-        candidates.update(self.c3.get((ctx[0], ctx[1]), {}).keys())
-        candidates.update(self.c2_cont.get(ctx[1], {}).keys())
+        candidates.update(top(self.c3.get((ctx[0], ctx[1]), Counter()), 100))
+        candidates.update(top(self.c2_cont.get(ctx[1], Counter()), 100))
         if len(candidates) < k * 4:
-            candidates.update(w for w, _ in self.cont_unigram.most_common(200))
+            candidates.update(top(self.cont_unigram, 200))
         candidates -= {UNK, EOS, BOS}
-        if prefix:
-            candidates = {w for w in candidates if w.startswith(prefix)}
         scored = sorted(((w, self.prob(w, context)) for w in candidates), key=lambda x: -x[1])
         return scored[:k]
 

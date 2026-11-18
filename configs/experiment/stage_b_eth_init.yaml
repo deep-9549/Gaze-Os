@@ -1,0 +1,8 @@
+# @package _global_
+# Stage B straight from the ETH-XGaze-trained ResNet-18 face stream, no Stage A
+# (docs/PLAN.md, arm b). Same schedule as stage_b_mpii so the arms compare fairly.
+init_checkpoint: null
+init_face_checkpoint: data/weights/eth-xgaze-resnet18/model.safetensors
+model: {backbone: resnet18}
+data: {shards: [data/shards/mpiifacegaze/*.h5], fold: 0, val_fraction: 0.15}
+train: {epochs: 10, lr_backbone: 5.0e-5, lr_new: 5.0e-4, warmup_epochs: 0, nll_warmup_epochs: 2}

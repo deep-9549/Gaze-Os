@@ -16,7 +16,14 @@ from PySide6.QtWidgets import QWidget
 from gazeos.control.engine import EngineOutput
 from gazeos.control.zoom import ZoomRegion
 from gazeos.types import TrackingStatus
-from gazeos.ui.common import STATUS_COLORS, apply_no_activate, color, device_ratio, overlay_flags
+from gazeos.ui.common import (
+    STATUS_COLORS,
+    apply_no_activate,
+    bring_to_top,
+    color,
+    device_ratio,
+    overlay_flags,
+)
 
 
 class Overlay(QWidget):
@@ -30,6 +37,7 @@ class Overlay(QWidget):
             self.setGeometry(screen.geometry())
         self.out: EngineOutput | None = None
         self.show_cursor = True
+        self._radius: float | None = None  # drawn cursor radius, eased
         self.banner: str | None = None
         self.toast: tuple[str, float] | None = None
         self._zoom_pixmap: QPixmap | None = None
@@ -38,6 +46,16 @@ class Overlay(QWidget):
         self._repaint = QTimer(self)
         self._repaint.timeout.connect(self.update)
         self._repaint.start(16)  # ~60 Hz redraw (PRD 8.1)
+        # Onboarding, menus and the keyboard are always-on-top too and cover the cursor
+        # when shown or clicked; re-assert the overlay's place above them.
+        self.stay_on_top = True
+        self._top = QTimer(self)
+        self._top.timeout.connect(self.keep_on_top)
+        self._top.start(500)
+
+    def keep_on_top(self) -> None:
+        if self.stay_on_top and self.isVisible():
+            bring_to_top(self)
 
     def showEvent(self, event: object) -> None:  # noqa: N802
         super().showEvent(event)  # type: ignore[arg-type]
@@ -85,15 +103,22 @@ class Overlay(QWidget):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(target)
 
-        if out is not None and out.cursor is not None and self.show_cursor:
+        if out is not None and out.cursor is not None:
             c = self._p(*out.cursor)
-            radius = max(10.0, min(out.sigma_px / self._ratio, 120.0))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(color(th, "cursor", 60 if not out.paused else 25)))
-            painter.drawEllipse(c, radius, radius)
-            painter.setBrush(QBrush(color(th, "cursor", 200 if not out.paused else 80)))
-            painter.drawEllipse(c, 4.0, 4.0)
-            if out.dwell_progress > 0 and not out.paused:
+            if self.show_cursor:
+                target_r = max(10.0, min(out.sigma_px / self._ratio, 120.0))
+                # sigma_px changes every frame; ease the size (~0.3 s at 60 Hz) so it does not pulse.
+                self._radius = target_r if self._radius is None else self._radius + 0.05 * (target_r - self._radius)
+                radius = self._radius
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QBrush(color(th, "cursor", 60 if not out.paused else 25)))
+                painter.drawEllipse(c, radius, radius)
+                painter.setBrush(QBrush(color(th, "cursor", 200 if not out.paused else 80)))
+                painter.drawEllipse(c, 4.0, 4.0)
+            # The ring stays when the cursor is hidden: it is the warning that a look is about to
+            # press something, and the way to find "Show gaze cursor" again by gaze.
+            # While paused only Pause itself reports progress: its ring shows the look is working.
+            if out.dwell_progress > 0:
                 ring = 26.0
                 pen = QPen(color(th, "ring"), 6)
                 pen.setCapStyle(Qt.PenCapStyle.RoundCap)

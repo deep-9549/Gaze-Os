@@ -21,7 +21,7 @@ from gazeos.calibration.geometry import ScreenGeometry
 from gazeos.calibration.protocol import GazeObservation
 from gazeos.control.engine import ControlEngine, EngineInput, EngineOutput
 from gazeos.control.filters import OneEuroFilter
-from gazeos.gestures.blink import BlinkDetector, BlinkEvent, eye_state
+from gazeos.gestures.blink import BlinkDetector, BlinkEvent, LidGate, eye_state
 from gazeos.gestures.events import FeatureWindow, GestureEventDetector, scale_by_gesture_size
 from gazeos.inference.gaze import GazeEstimate, GeometricGazeEstimator
 from gazeos.settings import Settings
@@ -31,7 +31,7 @@ from gazeos.vision.enhance import mean_brightness
 from gazeos.vision.geometry import head_direction_pitchyaw, rotation_to_euler
 from gazeos.vision.head_pose import CameraIntrinsics, HeadPose, HeadPoseEstimator
 from gazeos.vision.landmarks import LandmarkResult
-from gazeos.vision.normalization import NormalizationResult, normalize
+from gazeos.vision.normalization import NormalizationResult, normalize, warp_matrix
 from gazeos.vision.quality import QualityGate, QualityReport
 
 log = logging.getLogger(__name__)
@@ -84,6 +84,17 @@ class FrameProcessor:
         self.window = FeatureWindow()
         self.gestures = GestureEventDetector(settings.gestures.probability_threshold, settings.gestures.refractory_ms)
         self._prev_head: tuple[float, float, float] | None = None
+        q = settings.quality
+        self.lids = LidGate(q.lid_hidden_level, q.lid_speed, q.lid_hold_frames)
+
+    def apply_settings(self, settings: Settings) -> None:
+        """Saved settings take effect at once (the gates and detectors copy their values)."""
+        self.s = settings
+        self.quality = QualityGate(settings.quality)
+        self.blinks = BlinkDetector(settings.blink)
+        self.gestures = GestureEventDetector(settings.gestures.probability_threshold, settings.gestures.refractory_ms)
+        q = settings.quality
+        self.lids = LidGate(q.lid_hidden_level, q.lid_speed, q.lid_hold_frames)
 
     def process_image(self, image_rgb: NDArray[np.uint8], t: float) -> ProcessedFrame:
         if self.landmarker is None:
@@ -96,9 +107,14 @@ class FrameProcessor:
         return out
 
     def process_landmarks(
-        self, lm: LandmarkResult, t: float, image_rgb: NDArray[np.uint8] | None = None
+        self, lm: LandmarkResult, t: float, image_rgb: NDArray[np.uint8] | None = None,
+        crops: tuple[NDArray[np.uint8], NDArray[np.uint8], NDArray[np.uint8]] | None = None,
     ) -> ProcessedFrame:
-        """Everything after face landmarks; image is needed for the CNN and brightness."""
+        """Everything after face landmarks; image is needed for the CNN and brightness.
+
+        `crops` (normalized face, right eye, left eye) replays a research recording through
+        the CNN without the camera image: the crops are the saved ones, the normalization
+        rotation is recomputed from the landmarks."""
         timings: dict[str, float] = {}
         res = FrameResult(t_capture=t, num_faces=lm.num_faces)
         if image_rgb is not None:
@@ -107,6 +123,7 @@ class FrameProcessor:
             q = self.quality.check(t, 0)
             self.head.reset()
             self.blinks.reset()
+            self.lids.reset()
             res.status = q.status.value
             res.quality_ok = False
             return ProcessedFrame(res, EngineInput(t, None, q))
@@ -128,11 +145,13 @@ class FrameProcessor:
 
         # Eyes and blinks.
         ear_l, ear_r = feat.ear_pair(landmarks)
-        state = eye_state(lm.blendshapes, ear_l, ear_r, self.s.blink.ear_threshold,
-                          self.s.quality.blink_score_threshold)
+        state = eye_state(lm.blendshapes, ear_l, ear_r, self.s.blink.ear_threshold, self.s.blink.closed_score)
         blink_score = max(lm.blendshapes.get("eyeBlinkLeft", 0.0), lm.blendshapes.get("eyeBlinkRight", 0.0)) \
             if lm.blendshapes else (1.0 if state.both_closed else 0.0)
-        blink_event = self.blinks.update(t, state)
+        both_score = min(lm.blendshapes.get("eyeBlinkLeft", 0.0), lm.blendshapes.get("eyeBlinkRight", 0.0)) \
+            if lm.blendshapes else None
+        blink_event = self.blinks.update(t, state, both_score)
+        lid_down = not self.lids.update(blink_score)
 
         brightness = 255.0
         if image_rgb is not None:
@@ -167,8 +186,14 @@ class FrameProcessor:
         norm = estimate = obs = None
         if q.ok:
             tg = time.perf_counter()
-            if self.gaze_model is not None and image_rgb is not None:
-                norm = normalize(image_rgb, landmarks, pose, self.intrinsics)
+            if self.gaze_model is not None and (image_rgb is not None or crops is not None):
+                if image_rgb is not None:
+                    norm = normalize(image_rgb, landmarks, pose, self.intrinsics)
+                else:
+                    assert crops is not None
+                    W, R_n, S = warp_matrix(pose.face_center, pose.R, self.intrinsics)
+                    norm = NormalizationResult(crops[0], crops[1], crops[2], R_n, S, W,
+                                               rotation_to_euler(R_n @ pose.R))
                 timings["normalize"] = (time.perf_counter() - tg) * 1000.0
                 tn = time.perf_counter()
                 estimate = self.gaze_model.estimate(norm)
@@ -196,6 +221,10 @@ class FrameProcessor:
         res.quality_ok = q.ok
         res.eye_closed = state.both_closed
         res.timings_ms.update(timings)
+        res.lid_down = lid_down
+        res.blink_score = blink_score
+        if lid_down:  # recorded in res for analysis, but neither cursor nor calibration use it
+            obs = None
         inp = EngineInput(t, obs, q, blink_event=blink_event, gesture_event=gesture_event,
                           eyes_closed=state.both_closed)
         return ProcessedFrame(res, inp, norm, pose, estimate, obs)
@@ -223,14 +252,70 @@ class ProcessingThread(threading.Thread):
         self._stop_evt = threading.Event()
         self.fps = 0.0
         self._lock = threading.Lock()
+        self.stalled = False
+        # GAZEOS_TRACE=path.csv: one line per frame with every stage of the cursor, for
+        # finding where a screen area becomes unreachable (fable_opinion.md 4.7).
+        import os
+
+        self._trace = None
+        if os.environ.get("GAZEOS_TRACE"):
+            self._trace = open(os.environ["GAZEOS_TRACE"], "w", buffering=1)  # noqa: SIM115
+            self._trace.write("t,status,quality_ok,lid_down,blink,raw_x,raw_y,cal_x,cal_y,cursor_x,cursor_y,state,dwell_key,"
+                              "paused,head_x,head_y,head_z,fix_x,fix_y\n")
+            self._trace_targets_t = 0.0
+
+    def _write_trace(self, pf: ProcessedFrame, out: EngineOutput | None) -> None:
+        r, o, eng = pf.result, pf.engine_input.obs, self.engine
+        raw = cal = (float("nan"), float("nan"))
+        if o is not None and eng is not None:
+            raw = (float(o.screen_px[0]), float(o.screen_px[1]))
+            c = eng.drift.apply(eng.personalizer.predict_px(o))
+            cal = (float(c[0]), float(c[1]))
+        cur = out.cursor if out is not None and out.cursor is not None else (float("nan"), float("nan"))
+        key = eng._dwell_target.key if eng is not None and eng._dwell_target is not None else ""
+        key = key.replace(",", "%2C")  # the comma key is named key_, and would split the CSV row
+        # Where the head is (gaze origin, app mm) and the Fix cursor offset now in use: the cursor
+        # drifted 2-4 cm within minutes of calibrating on 18 Nov, and posture is the suspect.
+        head = pf.pose.gaze_origin if pf.pose is not None else (float("nan"),) * 3
+        fix = eng.drift.offset if eng is not None else (float("nan"),) * 2
+        assert self._trace is not None
+        self._trace.write(f"{r.t_capture:.4f},{r.status},{int(r.quality_ok)},{int(getattr(r, 'lid_down', False))},"
+                          f"{getattr(r, 'blink_score', 0.0):.3f},{raw[0]:.1f},{raw[1]:.1f},{cal[0]:.1f},{cal[1]:.1f},"
+                          f"{cur[0]},{cur[1]},{out.state.value if out else ''},{key},{int(out.paused) if out else ''},"
+                          f"{head[0]:.0f},{head[1]:.0f},{head[2]:.0f},{fix[0]:.0f},{fix[1]:.0f}\n")
+        if eng is not None and r.t_capture - self._trace_targets_t > 2.0:  # where GazeOS's own buttons are
+            self._trace_targets_t = r.t_capture
+            import json
+
+            with open(self._trace.name + ".targets.json", "w") as fh:
+                json.dump({t.key: [t.rect.left, t.rect.top, t.rect.width, t.rect.height] for t in eng.registry.all()}, fh)
+
+    # No frame for this long, or this many frames failing in a row: stop acting.
+    STALL_S = 1.0
+    STALL_FAILURES = 15
+
+    def _stall(self) -> None:
+        """The camera stopped or processing keeps failing. The engine only sees frames, so
+        without this a held drag or a running dwell would stay as it was. Pauses like a
+        lost face, so control resumes by itself when frames return (if that is enabled)."""
+        self.stalled = True
+        with self._lock:
+            if self.engine is not None and not self.engine.paused:
+                self.engine.set_paused(True, "face_lost")
+        log.warning("no usable camera frames; input paused")
 
     def run(self) -> None:
         last = time.monotonic()
         frames = 0
+        last_frame = time.monotonic()
+        failures = 0
         while not self._stop_evt.is_set():
             frame = self.capture.latest(timeout=0.5)  # type: ignore[attr-defined]
             if frame is None:
+                if not self.stalled and time.monotonic() - last_frame > self.STALL_S:
+                    self._stall()
                 continue
+            last_frame = time.monotonic()
             t0 = time.perf_counter()
             try:
                 pf = self.processor.process_image(frame.image_rgb, frame.t_capture)
@@ -245,10 +330,17 @@ class ProcessingThread(threading.Thread):
                 if out is not None:
                     pf.result.screen_xy = out.cursor
                     pf.result.state = out.state.value
+                if self._trace is not None:
+                    self._write_trace(pf, out)
                 if self.on_frame is not None:
                     self.on_frame(pf, out, frame.image_rgb)
+                failures = 0
+                self.stalled = False
             except Exception:
                 log.exception("frame processing failed")
+                failures += 1
+                if failures == self.STALL_FAILURES:
+                    self._stall()
             frames += 1
             now = time.monotonic()
             if now - last >= 1.0:

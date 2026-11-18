@@ -134,3 +134,41 @@ def test_implicit_recalibration(settings, geometry, intrinsics, user) -> None:
     assert rec.on_click(t, hist, (50.0, 50.0)) == 0
     rec.on_click(t, hist, target)
     assert rec.refits == 1
+
+
+def test_blinking_lids_give_no_gaze_sample(settings, geometry, intrinsics, user) -> None:
+    """A lid moving fast (a blink) pulls the network's gaze 3-10 degrees down (measured on
+    the webcam), so those frames, and two after, neither move the cursor nor calibrate;
+    a steadily lowered lid (looking at the bottom of the screen) still does (ADR 0007)."""
+    proc = FrameProcessor(settings, geometry, intrinsics, None)
+    got = []
+    for i, score in enumerate([0.05, 0.6, 0.1, 0.1, 0.1, 0.1, 0.3, 0.35, 0.35, 0.35]):
+        lm = user.look_at(960, 540)
+        lm.blendshapes = {**(lm.blendshapes or {}), "eyeBlinkLeft": score, "eyeBlinkRight": 0.05}
+        pf = proc.process_landmarks(lm, i / 30)
+        got.append(pf.observation is not None and pf.engine_input.obs is not None)
+    assert got == [True, False, False, False, False, True, False, False, False, True]
+
+
+def test_posture_guard_warns_after_the_head_has_moved_away() -> None:
+    from gazeos.calibration.posture import PostureGuard
+
+    g = PostureGuard(limit_mm=90.0, hold_s=3.0, repeat_s=60.0)
+    assert g.update(0.0, np.array([0.0, 0.0, 600.0])) is None  # no calibration yet
+    g.set_reference(np.array([[0.0, 10.0, 842.0], [2.0, 8.0, 840.0], [-1.0, 12.0, 845.0]]))
+    assert g.update(0.0, np.array([5.0, 12.0, 820.0])) is None  # small moves are fine
+    for t in np.arange(0.0, 2.9, 0.1):  # 18 Nov: about 19 cm closer and 2.5 cm higher
+        assert g.update(t, np.array([5.0, -14.0, 656.0])) is None  # not for a moment
+    msg = g.update(3.1, np.array([5.0, -14.0, 656.0]))
+    assert msg is not None and "closer to the screen" in msg and "Fix cursor" in msg
+    assert g.update(10.0, np.array([5.0, -14.0, 656.0])) is None  # once a minute at most
+    assert g.update(70.0, np.array([5.0, -14.0, 656.0])) is not None
+    assert g.update(71.0, np.array([0.0, 10.0, 842.0])) is None  # back in place
+
+
+def test_posture_guard_names_the_direction() -> None:
+    from gazeos.calibration.posture import describe
+
+    assert describe(np.array([0.0, 0.0, 150.0])) == "further from the screen"
+    assert describe(np.array([120.0, 0.0, 0.0])) == "to your left"
+    assert describe(np.array([-120.0, 60.0, -10.0])) == "to your right and lower"

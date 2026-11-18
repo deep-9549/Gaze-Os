@@ -124,4 +124,57 @@ def test_figures_render(tmp_path) -> None:
     figures.reliability_diagram([1, 2, 3], [1.1, 2.2, 2.9], tmp_path / "c.png")
     figures.grouped_breakdown({"Lighting": {"bright": 1.8, "dim": 2.4}}, tmp_path / "d.png")
     figures.scatter_speed_accuracy(["M3", "M4"], [20.0, 6.0], [1.7, 1.9], tmp_path / "e.png")
-    assert len(list(tmp_path.glob("*.png"))) == 5
+    figures.filter_tradeoff({"none": {"rms_jitter_deg": 1.1, "lag_ms": 470, "selection_rate": 0.2},
+                             "one_euro": {"rms_jitter_deg": 0.13, "lag_ms": 570, "selection_rate": 1.0}},
+                            tmp_path / "f.png")
+    figures.keystroke_savings({"L0 word list": {"keystroke_savings": 0.43}}, tmp_path / "g.png")
+    table = {"arms": {"e2/no_head": {"delta_vs_e1": -0.4, "folds_done": 3},
+                      "e3/beta2": {"delta_vs_e1": 0.02, "folds_done": 3}},
+             "seeds": {"no_head": {"runs": 9, "delta": -0.3, "delta_ci95": 0.2}}}
+    rows = figures.ablation_rows(table)
+    assert rows[0] == ("Inputs: no head pose (9 runs)", -0.3, 0.2)  # the 3-seed result replaces seed 0's
+    figures.ablation_deltas(rows, 0.35, tmp_path / "h.png")
+    assert len(list(tmp_path.glob("*.png"))) == 8
+
+
+def test_ablation_table_compares_each_arm_with_e1_on_the_same_folds(tmp_path) -> None:
+    import json
+
+    from research.ablation_table import table
+
+    def run(d, err):
+        d.mkdir(parents=True)
+        (d / "result.json").write_text(json.dumps({"test": {"mean_error_deg": err}}))
+
+    e1 = tmp_path / "e1"
+    for f, err in enumerate([3.0, 4.0, 5.0]):
+        run(e1 / f"fold{f}", err)
+        run(e1 / "seed1" / f"fold{f}", err + 0.3)
+        run(e1 / "seed2" / f"fold{f}", err - 0.1)
+    run(tmp_path / "e2" / "eyes_only" / "fold0", 3.5)  # only fold 0 done: compared on fold 0 only
+    r = table([tmp_path / "e2"], e1)
+    assert r["e1_seed0"]["seed_spread_deg"] == pytest.approx(0.4)
+    arm = r["arms"]["e2/eyes_only"]
+    assert arm["folds_done"] == 1 and arm["delta_vs_e1"] == pytest.approx(0.5)
+
+
+def test_seed_table_pairs_each_run_with_e1_on_the_same_seed_and_subject(tmp_path) -> None:
+    import json
+
+    from research.ablation_table import seed_table
+
+    def run(d, err):
+        d.mkdir(parents=True)
+        (d / "result.json").write_text(json.dumps({"test": {"mean_error_deg": err}}))
+
+    e1 = tmp_path / "e1"
+    for f, err in enumerate([3.0, 4.0, 5.0]):
+        for s in (0, 1, 2):
+            run(e1 / f"fold{f}" if s == 0 else e1 / f"seed{s}" / f"fold{f}", err + 0.1 * s)
+            arm_err = err + 0.1 * s - 0.3 - 0.01 * f  # 0.3-0.32 deg better than E1 in every run
+            run(tmp_path / "e2" / "no_head" / f"fold{f}" if s == 0 else
+                tmp_path / "e2_seeds" / "no_head" / f"seed{s}" / f"fold{f}", arm_err)
+    r = seed_table(tmp_path / "e2", tmp_path / "e2_seeds", e1)["no_head"]
+    assert r["runs"] == 9 and r["better_in"] == 9
+    assert r["delta"] == pytest.approx(-0.31)
+    assert r["p"] < 0.001 and r["p_holm"] == pytest.approx(r["p"])

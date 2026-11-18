@@ -28,7 +28,8 @@ def test_normal_blink_never_clicks() -> None:
 
 def test_long_blink_and_pause() -> None:
     assert _closure(BlinkDetector(), 0.0, 600)[0] == [BlinkEvent.LONG_BLINK]
-    assert _closure(BlinkDetector(), 0.0, 2300)[0] == [BlinkEvent.PAUSE_TOGGLE]
+    assert _closure(BlinkDetector(), 0.0, 2300)[0] == []  # eyes-closed pause is off by default
+    assert _closure(BlinkDetector(BlinkSettings(eyes_closed_pause=True)), 0.0, 2300)[0] == [BlinkEvent.PAUSE_TOGGLE]
     assert _closure(BlinkDetector(), 0.0, 1500)[0] == []  # between long blink and pause
 
 
@@ -89,3 +90,17 @@ def test_feature_window_and_gesture_size() -> None:
     scaled = scale_by_gesture_size(_probs("eyebrow_raise", 0.6), 2.0)
     assert scaled["eyebrow_raise"] < 0.6
     assert abs(sum(scaled.values()) - 1.0) < 1e-9
+
+
+def test_lid_gate_keeps_a_lowered_lid_and_drops_blinks() -> None:
+    from gazeos.gestures.blink import LidGate
+
+    gate = LidGate(hidden_level=0.45, speed=0.1, hold_frames=2)
+    # Looking down: the lid settles lower (score 0.3) and the gaze stays usable.
+    down = [gate.update(s) for s in (0.1, 0.17, 0.25, 0.3, 0.3, 0.31, 0.3)]
+    assert down == [True, True, True, True, True, True, True]
+    # A blink: fast rise and fall, then two more frames held.
+    blink = [gate.update(s) for s in (0.3, 0.6, 0.7, 0.4, 0.25, 0.3, 0.3, 0.3)]
+    assert blink == [True, False, False, False, False, False, False, True]
+    # A lid that hides the iris for a while.
+    assert not any(gate.update(0.5) for _ in range(5))

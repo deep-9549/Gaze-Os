@@ -37,7 +37,13 @@ class TypingSession:
 
     def press(self, key: Key, gaze_point: tuple[float, float] | None = None) -> Suggestions:
         self.keystrokes += 1
-        if key.letters:
+        if key.text:
+            # A digit or symbol is typed exactly as it is, never shifted or decoded. It ends the
+            # word, so predictions start afresh after it, and like . , ? it uses up a pending Shift.
+            self._commit_word_boundary()
+            self.shift = False
+            self._type(key.text)
+        elif key.letters:
             ch = key.letters[0]
             if self.layout.grouped and gaze_point is None:
                 gaze_point = key.center

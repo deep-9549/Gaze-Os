@@ -26,7 +26,7 @@ gazeos                                                  # first run opens onboar
 
 Without a trained gaze network, GazeOS uses the geometric M0 baseline (iris
 position plus head pose), so it works end to end from day one. Accuracy then comes from
-calibration. Drop a trained model at `models/gazenet_lite_int8.onnx`, or convert
+calibration. Drop a trained model at `models/gazenet_lite.onnx`, or convert
 the L2CS-Net weights (see [docs/TRAINING.md](docs/TRAINING.md)), and GazeOS uses
 it automatically.
 

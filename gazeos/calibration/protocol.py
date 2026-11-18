@@ -59,6 +59,14 @@ def quick_targets(geometry: ScreenGeometry) -> list[tuple[float, float]]:
     return [(geometry.width_px / 2.0, geometry.height_px / 2.0)]
 
 
+def region_name(target: tuple[float, float], geometry: ScreenGeometry) -> str:
+    """Where a target sits, in words ("top-left", "centre", "bottom", ...)."""
+    col = min(int(3 * target[0] / geometry.width_px), 2)
+    row = min(int(3 * target[1] / geometry.height_px), 2)
+    vertical, horizontal = ("top", "", "bottom")[row], ("left", "", "right")[col]
+    return "-".join(p for p in (vertical, horizontal) if p) or "centre"
+
+
 def shuffled(targets: list[tuple[float, float]], seed: int | None = None) -> list[tuple[float, float]]:
     out = list(targets)
     random.Random(seed).shuffle(out)
