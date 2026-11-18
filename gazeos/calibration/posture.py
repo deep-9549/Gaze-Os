@@ -53,7 +53,7 @@ class PostureGuard:
             return None
         self._last_warning = t
         return (f"You have moved {describe(delta)} since calibrating, so the cursor may be off. "
-                "Sit where you were, or calibrate again: look at the top-right corner, then Calibrate.")
+                "Sit where you were, or look at Fix cursor (on the keyboard or in the menu).")
 
 
 def describe(delta_mm: FloatArray) -> str:

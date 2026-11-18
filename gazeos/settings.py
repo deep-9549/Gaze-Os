@@ -189,6 +189,15 @@ class TypingSettings(_Section):
     tts_engine: Literal["pyttsx3", "piper", "none"] = "pyttsx3"
     piper_voice: str | None = None
     min_key_error_multiple: float = 2.5
+    # Off: keeping the gaze on a key does not type it again (look away and back instead). On
+    # 18 Nov 2026 the cursor sat a row above the key being looked at, and with repeat on, the
+    # wrong letter was typed up to 14 times in a row while the user kept looking.
+    key_repeat: bool = False
+    # When the keyboard opens and the last calibration or "Fix cursor" is older than this,
+    # the cursor is re-aimed first (one dot, about 4 s); 0 = never. Webcam gaze shifts with
+    # posture: on 18 Nov it was 2-4 cm off within two minutes of a good calibration, and one
+    # dot removed most of it (163 -> 60 px on the keys the user marked).
+    auto_aim_after_s: float = Field(120.0, ge=0.0)
 
 
 class CalibrationSettings(_Section):

@@ -85,7 +85,14 @@ def _rows_layout(name: str, rows: list[str], offsets: list[float]) -> Layout:
             keys.append(Key(ch, label, off + col, float(row_i), 1.0, 1.0, letters=ch))
     keys += _special_row(float(len(rows)), width)
     keys.append(Key("close", "Close", width, 0.0, 1.0, 1.0))
+    keys.append(_aim_key(width, 1.0))
     return Layout(name, tuple(keys), width + 1.0, float(len(rows) + 1))
+
+
+def _aim_key(x: float, y: float) -> Key:
+    """The "Fix cursor" key: re-aims the cursor with one dot. Two rows tall at the keyboard's edge,
+    so it can still be reached when the cursor is a key's height off, which is when it is needed."""
+    return Key("aim", "Fix\ncursor", x, y, 1.0, 2.0)
 
 
 def qwerty() -> Layout:
@@ -111,8 +118,9 @@ def large6() -> Layout:
         Key("phrases", "Phrases", 0.0, y + 1.5, 2.0, 1.0),
         Key("enter", "Enter", 2.0, y + 1.5, 2.0, 1.0),
         Key("close", "Close", 4.0, y + 1.5, 2.0, 1.0),
+        _aim_key(6.0, 0.0),
     ]
-    return Layout("large6", tuple(keys), 6.0, 6.5)
+    return Layout("large6", tuple(keys), 7.0, 6.5)
 
 
 LAYOUTS = {"qwerty": qwerty, "alphabetical": alphabetical, "large6": large6}

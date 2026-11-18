@@ -322,9 +322,9 @@ def test_keep_looking_at_a_typing_key_to_type_it_again(settings, geometry) -> No
 
 @pytest.mark.xfail(reason="test setup, not the app: on the offscreen 800x800 test screen the cursor smoothing holds the cursor short of the key (it stays near the screen centre), so no key is dwelled; the engine-level typing tests cover the same logic. To fix: start each look with a saccade or give the test app a real screen geometry (18 Nov).", strict=False)
 def test_hands_free_typing_through_the_whole_app(qtbot, tmp_path) -> None:
-    """Gaze on the real keyboard's registered keys types text: H, I; held L twice; 123, 7, ABC;
-    and a paused app resumes only through Pause. The whole chain: TargetSync registration,
-    engine dwell and repeat, the main-thread bridge, the keyboard and the typing session."""
+    """Gaze on the real keyboard's registered keys types text: H, I; held L once (no repeat);
+    123, 7, ABC; and a paused app resumes only through Pause. The whole chain: TargetSync
+    registration, engine dwell, the main-thread bridge, the keyboard and the typing session."""
     pytest.importorskip("PySide6")
     from types import SimpleNamespace
 
@@ -349,22 +349,22 @@ def test_hands_free_typing_through_the_whole_app(qtbot, tmp_path) -> None:
             qtbot.wait(50)  # let the queued button presses run on the GUI thread
 
         # Each look lasts long enough for the 0.5 s cooldown after the previous press plus the
-        # 0.8 s dwell; the held L presses again after a further 0.7 + 0.8 s.
+        # 0.8 s dwell. Keys do not repeat (settings: typing.key_repeat off).
         look("keyboard:key_h:", 1.5)
         look("keyboard:key_i:", 1.5)
-        look("keyboard:key_l:", 3.0)  # held: typed twice
+        look("keyboard:key_l:", 3.0)  # held: typed once
         assert app.keyboard is not None
-        assert app.keyboard.session.text == "hill"
+        assert app.keyboard.session.text == "hil"
         look("keyboard:key_numbers:", 1.5)
         qtbot.wait(100)
         look("keyboard:key_sym_digit_seven:", 1.5)
         look("keyboard:key_letters:", 1.5)
         qtbot.wait(100)
-        assert app.keyboard.session.text == "hill7"
+        assert app.keyboard.session.text == "hil7"
         assert any(t.key.startswith("keyboard:key_a:") for t in (app.sync.sync() or app.registry.all()))
         app.engine.set_paused(True)
         look("keyboard:key_a:", 1.5)  # paused: keys do nothing
-        assert app.keyboard.session.text == "hill7" and app.engine.paused
+        assert app.keyboard.session.text == "hil7" and app.engine.paused
         look("action_bar:pause:", 1.5)  # Pause resumes
         assert not app.engine.paused
         look("action_bar:pause:", 2.0)  # and staring on does not pause again at once
@@ -820,3 +820,114 @@ def test_a_dwell_spot_fires_again_only_after_the_gaze_left_it() -> None:
         t += 1 / 30
         fires += d.update(t, spot).fired
     assert fires == 2
+
+
+# -- 18 Nov live run: within two minutes of a good calibration (0.6 cm) the cursor sat a key's
+# -- height above where the user looked; staring then typed the wrong key up to 14 times, and a
+# -- glance on the way to "Yes, quit" pressed Debug view in the menu behind the question.
+
+
+def test_a_question_on_screen_is_the_only_thing_that_responds(settings, geometry) -> None:
+    """While a yes/no question is open, a stare at a button behind it or at the desktop presses
+    and clicks nothing; the question's own Yes works, and once it is answered all is as before."""
+    from gazeos.control.targets import GazeTarget, TargetRegistry
+
+    pressed: list[str] = []
+    reg = TargetRegistry()
+    reg.register(GazeTarget("menu:menu_debug:1", Rect(650, 450, 100, 100), lambda: pressed.append("debug"), "menu"))
+    reg.register(GazeTarget("confirm:confirm_yes:2", Rect(1000, 450, 100, 100), lambda: pressed.append("yes"),
+                            "confirm"))
+    eng, be = _engine(settings, geometry)
+    eng.registry = reg
+
+    def look(point, seconds, t):  # type: ignore[no-untyped-def]
+        for _ in range(int(round(seconds * 30))):
+            t += 1 / 30
+            eng.update(EngineInput(t, _obs(point), OK))
+        return t
+
+    t = look(POINT, 2.0, 0.0)  # on Debug view, behind the question
+    t = look((300.0, 900.0), 2.0, t)  # on the desktop
+    assert pressed == [] and not be.of_kind("click")
+    t = look((1050.0, 500.0), 1.5, t)  # on Yes
+    assert pressed == ["yes"]
+    reg.clear_group("confirm")  # answered: the panel hides
+    look(POINT, 2.0, t)
+    assert pressed == ["yes", "debug"]
+
+
+def test_keys_do_not_repeat_unless_asked_and_fix_cursor_is_on_the_keyboard(qtbot, tmp_path) -> None:
+    pytest.importorskip("PySide6")
+    from gazeos.text_entry.layouts import get_layout
+    from gazeos.text_entry.phrases import PhraseBank
+    from gazeos.text_entry.predictor import Predictor
+    from gazeos.text_entry.session import TypingSession
+    from gazeos.text_entry.tts import SilentSpeaker
+    from gazeos.ui.keyboard import KeyboardWindow
+
+    aims: list[int] = []
+    layout = get_layout("qwerty")
+    predictor = Predictor.default(layout, ngram_path=tmp_path / "none.json")  # the small built-in one
+    for repeat in (False, True):
+        kb = KeyboardWindow(TypingSession(layout, predictor), PhraseBank(tmp_path / "p.json"), SilentSpeaker(),
+                            30.0, lambda: None, on_aim=lambda: aims.append(1), key_repeat=repeat)
+        qtbot.addWidget(kb)
+        assert bool(kb.key_buttons["l"].property("gaze_repeat")) is repeat
+        assert bool(kb.key_buttons["backspace"].property("gaze_repeat")) is repeat
+    aim = kb.key_buttons["aim"]
+    assert aim.text() == "Fix\ncursor" and aim.height() > 1.5 * kb.unit  # two rows tall
+    aim.click()
+    assert aims == [1] and kb.session.text == ""
+
+
+def test_fix_cursor_starts_at_once(qtbot, geometry) -> None:
+    """Fix cursor is asked for in the middle of typing: its dot comes after 1.5 s, not the
+    full calibration's 5 s."""
+    pytest.importorskip("PySide6")
+    from gazeos.calibration.personalization import make_personalizer
+    from gazeos.settings import CalibrationSettings
+    from gazeos.ui.calibration import CalibrationWindow
+
+    cal = CalibrationSettings()
+    assert cal.auto_start_s == 5.0
+    for quick, low, high in ((True, 1.0, 1.6), (False, 4.5, 5.1)):
+        win = CalibrationWindow(geometry, make_personalizer("polynomial", geometry), cal, lambda o: None, quick=quick)
+        qtbot.addWidget(win)
+        t0 = time.monotonic()
+        win.show()
+        assert win._auto_at is not None and low <= win._auto_at - t0 <= high, quick
+        win._disarm()
+
+
+def test_the_keyboard_re_aims_when_the_cursor_was_last_aimed_long_ago(qtbot, gaze_app, monkeypatch) -> None:
+    app = gaze_app
+    aims: list[int] = []
+    monkeypatch.setattr(app, "fix_cursor", lambda: aims.append(1))
+    monkeypatch.setattr(app.profile, "has_calibration", lambda: True)
+    monkeypatch.setattr(app, "simulate", False)
+    assert app._aim_is_stale()  # a calibration from an earlier sitting does not count
+    app._last_aim_t = time.monotonic()
+    assert not app._aim_is_stale()
+    app._last_aim_t -= app.settings.typing.auto_aim_after_s + 1.0
+    assert app._aim_is_stale()
+    app.settings.typing.auto_aim_after_s = 0.0  # off
+    assert not app._aim_is_stale()
+    app.settings.typing.auto_aim_after_s = 120.0
+    app.toggle_keyboard()
+    qtbot.waitUntil(lambda: app.keyboard is not None and app.keyboard.isVisible(), timeout=30000)
+    qtbot.waitUntil(lambda: aims == [1], timeout=3000)
+
+
+def test_fix_cursor_moves_the_cursor_and_counts_as_aimed(gaze_app) -> None:
+    from gazeos.calibration.protocol import CalibrationSample, ValidationResult
+    from gazeos.ui.calibration import CalibrationOutcome
+
+    app = gaze_app
+    sample = CalibrationSample(_obs(), np.array([960.0, 540.0]))
+    result = ValidationResult([100.0], [1.0], 100.0, 1.0, 1.0, 90)
+    app._calibration_done(CalibrationOutcome([sample], app.personalizer, result, quick_offset=np.array([5000.0, 0.0])))
+    assert np.allclose(app.engine.drift.offset, 0.0) and app._last_aim_t is None  # too large: not applied
+    # 18 Nov: the cursor sat 140 px above and 70 px right of where the user looked
+    app._calibration_done(CalibrationOutcome([sample], app.personalizer, result, quick_offset=np.array([-70.0, 140.0])))
+    assert np.allclose(app.engine.drift.offset, [-70.0, 140.0]) and app._last_aim_t is not None
+    assert app.posture.reference is not None and np.allclose(app.posture.reference, [0.0, 100.0, 600.0])

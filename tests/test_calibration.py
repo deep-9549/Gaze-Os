@@ -160,7 +160,7 @@ def test_posture_guard_warns_after_the_head_has_moved_away() -> None:
     for t in np.arange(0.0, 2.9, 0.1):  # 18 Nov: about 19 cm closer and 2.5 cm higher
         assert g.update(t, np.array([5.0, -14.0, 656.0])) is None  # not for a moment
     msg = g.update(3.1, np.array([5.0, -14.0, 656.0]))
-    assert msg is not None and "closer to the screen" in msg and "Calibrate" in msg
+    assert msg is not None and "closer to the screen" in msg and "Fix cursor" in msg
     assert g.update(10.0, np.array([5.0, -14.0, 656.0])) is None  # once a minute at most
     assert g.update(70.0, np.array([5.0, -14.0, 656.0])) is not None
     assert g.update(71.0, np.array([0.0, 10.0, 842.0])) is None  # back in place

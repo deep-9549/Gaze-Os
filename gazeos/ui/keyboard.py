@@ -28,12 +28,16 @@ class KeyboardWindow(QWidget):
         on_close: Callable[[], None],
         theme_name: str = "default",
         num_predictions: int = 4,
+        on_aim: Callable[[], None] | None = None,
+        key_repeat: bool = False,
     ) -> None:
         super().__init__(None, panel_flags())
         self.session = session
         self.phrases = phrases
         self.speaker = speaker
         self.on_close = on_close
+        self.on_aim = on_aim  # "Fix cursor": re-aim with one dot
+        self.key_repeat = key_repeat  # keep looking at a key to type it again (settings: off)
         self.num_predictions = num_predictions
         self.last_gaze_px: tuple[int, int] | None = None
         self.setStyleSheet(stylesheet(theme_name))
@@ -96,7 +100,7 @@ class KeyboardWindow(QWidget):
         for key in layout.keys:
             b = QPushButton(key.label.replace("&", "&&"), self.keys_host)  # a lone & marks a shortcut
             b.setObjectName(f"key_{key.id}")
-            if key.letters or key.text or key.id in ("space", "backspace"):
+            if self.key_repeat and (key.letters or key.text or key.id in ("space", "backspace")):
                 b.setProperty("gaze_repeat", True)  # keep looking to type it again
             if key.id == "enter":
                 b.setProperty("gaze_dwell_factor", 1.5)  # Enter sends forms and messages: a longer look
@@ -139,6 +143,10 @@ class KeyboardWindow(QWidget):
             return
         if key.id == "close":
             self.on_close()
+            return
+        if key.id == "aim":
+            if self.on_aim is not None:
+                self.on_aim()
             return
         if key.id in ("numbers", "symbols"):  # "123" and "#+=": the pages of digits and symbols
             page = 1 if key.id == "symbols" else 0

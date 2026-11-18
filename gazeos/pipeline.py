@@ -260,7 +260,8 @@ class ProcessingThread(threading.Thread):
         self._trace = None
         if os.environ.get("GAZEOS_TRACE"):
             self._trace = open(os.environ["GAZEOS_TRACE"], "w", buffering=1)  # noqa: SIM115
-            self._trace.write("t,status,quality_ok,lid_down,blink,raw_x,raw_y,cal_x,cal_y,cursor_x,cursor_y,state,dwell_key,paused\n")
+            self._trace.write("t,status,quality_ok,lid_down,blink,raw_x,raw_y,cal_x,cal_y,cursor_x,cursor_y,state,dwell_key,"
+                              "paused,head_x,head_y,head_z,fix_x,fix_y\n")
             self._trace_targets_t = 0.0
 
     def _write_trace(self, pf: ProcessedFrame, out: EngineOutput | None) -> None:
@@ -273,10 +274,15 @@ class ProcessingThread(threading.Thread):
         cur = out.cursor if out is not None and out.cursor is not None else (float("nan"), float("nan"))
         key = eng._dwell_target.key if eng is not None and eng._dwell_target is not None else ""
         key = key.replace(",", "%2C")  # the comma key is named key_, and would split the CSV row
+        # Where the head is (gaze origin, app mm) and the Fix cursor offset now in use: the cursor
+        # drifted 2-4 cm within minutes of calibrating on 18 Nov, and posture is the suspect.
+        head = pf.pose.gaze_origin if pf.pose is not None else (float("nan"),) * 3
+        fix = eng.drift.offset if eng is not None else (float("nan"),) * 2
         assert self._trace is not None
         self._trace.write(f"{r.t_capture:.4f},{r.status},{int(r.quality_ok)},{int(getattr(r, 'lid_down', False))},"
                           f"{getattr(r, 'blink_score', 0.0):.3f},{raw[0]:.1f},{raw[1]:.1f},{cal[0]:.1f},{cal[1]:.1f},"
-                          f"{cur[0]},{cur[1]},{out.state.value if out else ''},{key},{int(out.paused) if out else ''}\n")
+                          f"{cur[0]},{cur[1]},{out.state.value if out else ''},{key},{int(out.paused) if out else ''},"
+                          f"{head[0]:.0f},{head[1]:.0f},{head[2]:.0f},{fix[0]:.0f},{fix[1]:.0f}\n")
         if eng is not None and r.t_capture - self._trace_targets_t > 2.0:  # where GazeOS's own buttons are
             self._trace_targets_t = r.t_capture
             import json

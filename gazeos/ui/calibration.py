@@ -123,9 +123,14 @@ class CalibrationWindow(QWidget):
         outer.addStretch(1)
 
     # -- steps without a button ------------------------------------------------
+    # "Fix cursor" (quick, one dot) is asked for in the middle of typing: a short count is
+    # enough to find the dot in the centre.
+    QUICK_START_S = 1.5
+
     def showEvent(self, event: object) -> None:  # noqa: N802
         if self.phase == "intro" and self.s.auto_start_s > 0:
-            self._arm(self.s.auto_start_s, self.start, "Starting")
+            delay = min(self.s.auto_start_s, self.QUICK_START_S) if self.quick else self.s.auto_start_s
+            self._arm(delay, self.start, "Starting")
 
     def _arm(self, seconds: float, step: Callable[[], None], text: str) -> None:
         self._auto_at, self._auto_step, self._auto_text = time.monotonic() + seconds, step, text
@@ -320,7 +325,7 @@ class CalibrationWindow(QWidget):
         p.setPen(color(self.theme_name, "calib_fg" if light else "fg"))
         top = QRectF(0, 40, self.width(), 120)
         if self.phase == "intro":
-            msg = ("Look at the centre dot." if self.quick else
+            msg = ("Fix cursor: look at the dot in the centre." if self.quick else
                    f"Follow each dot with your eyes until it disappears ({len(self.targets)} dots, about "
                    f"{int(len(self.targets) * self.s.target_duration_s + 6)} s). Keep your head still.")
             p.drawText(top, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, msg)

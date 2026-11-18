@@ -85,6 +85,10 @@ class ControlEngine:
     MAX_LID_GAP_S = 1.5
     # GazeOS buttons that still respond while paused (registry keys start with these).
     RESUME_TARGETS = ("action_bar:pause:", "menu:menu_pause:")
+    # While a window of one of these groups is on screen (a yes/no question: Quit? Close the
+    # window?), only its buttons respond. On 18 Nov 2026 a glance on the way to "Yes, quit"
+    # pressed Debug view in the menu behind the question.
+    MODAL_GROUPS = ("confirm",)
     # A repeatable GazeOS target (typing keys) fires again when the gaze stays on it this long
     # after it fired, plus a full dwell: 0.7 + 0.8 = 1.5 s. On 18 Nov the gaze left a key a
     # median 0.3 s after it fired, and stayed over 1.5 s once in 90 presses (on Del).
@@ -298,15 +302,21 @@ class ControlEngine:
             if point is not None and dwell_enabled and not self._in_scroll_zone(cursor):
                 dwell_point = self._dwell_point(cursor)
                 tgt = self._dwell_target
-                self.dwell.dwell_s = self.s.dwell.dwell_ms / 1000.0 * (tgt.dwell_factor if tgt is not None else 1.0)
-                if (tgt is not None and tgt.repeat and tgt.key == self._repeat_key
-                        and self.dwell.state in (ControlState.FIRED, ControlState.COOLDOWN)
-                        and t - self._repeat_t >= self.REPEAT_AFTER_S):
-                    self.dwell.restart()  # still on the key that just fired: type it again
-                upd = self.dwell.update(t, dwell_point)
-                state, progress = upd.state, upd.progress
-                if upd.fired and upd.anchor is not None:
-                    events.append(self._fire(upd.anchor, t, source="dwell"))
+                if self._modal_open() and (tgt is None or tgt.group not in self.MODAL_GROUPS):
+                    # A question is on screen: nothing behind or around it is pressed or clicked.
+                    self.dwell.reset()
+                    self.dwell.forget_if_left(cursor)
+                    state, progress = ControlState.IDLE, 0.0
+                else:
+                    self.dwell.dwell_s = self.s.dwell.dwell_ms / 1000.0 * (tgt.dwell_factor if tgt is not None else 1.0)
+                    if (tgt is not None and tgt.repeat and tgt.key == self._repeat_key
+                            and self.dwell.state in (ControlState.FIRED, ControlState.COOLDOWN)
+                            and t - self._repeat_t >= self.REPEAT_AFTER_S):
+                        self.dwell.restart()  # still on the key that just fired: type it again
+                    upd = self.dwell.update(t, dwell_point)
+                    state, progress = upd.state, upd.progress
+                    if upd.fired and upd.anchor is not None:
+                        events.append(self._fire(upd.anchor, t, source="dwell"))
             elif point is None:
                 state = self.dwell.state
         elif self.paused and cursor is not None and point is not None:
@@ -371,6 +381,9 @@ class ControlEngine:
         margin = self.px_per_deg  # within 1 degree of an edge, snap onto it
         point = magnetic_edges(point, self.geometry.width_px, self.geometry.height_px, margin)
         return point, sigma_px
+
+    def _modal_open(self) -> bool:
+        return any(t.group in self.MODAL_GROUPS for t in self.registry.all())
 
     def _dwell_point(self, cursor: FloatArray) -> FloatArray:
         """Where the dwell clicker should see the cursor. On GazeOS's own targets (keys,

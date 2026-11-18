@@ -60,7 +60,7 @@ def test_layouts() -> None:
     for name in ("qwerty", "alphabetical", "large6"):
         lay = get_layout(name)
         assert all(lay.key_for_letter(ch) is not None for ch in "abcdefghijklmnopqrstuvwxyz")
-        assert {k.id for k in lay.keys} >= {"space", "backspace", "speak", "phrases", "enter", "close"}
+        assert {k.id for k in lay.keys} >= {"space", "backspace", "speak", "phrases", "enter", "close", "aim"}
     assert get_layout("large6").grouped and not get_layout("qwerty").grouped
     assert key_unit_px(40) == 100.0
 
@@ -185,7 +185,7 @@ def test_symbol_pages_keep_the_keyboard_in_place(name: str) -> None:
         lay = symbols_layout(base, page)
         keys = {k.id: k for k in lay.keys}
         assert (lay.width, lay.height) == (base.width, base.height)
-        for kid in ("space", "backspace", "enter", "speak", "phrases", "close"):
+        for kid in ("space", "backspace", "enter", "speak", "phrases", "close", "aim"):
             assert (keys[kid].x, keys[kid].y, keys[kid].w, keys[kid].h) == where[kid], kid
         abc, other = keys["letters"], keys[switch[0]]
         assert abc.label == "ABC" and (abc.x, abc.y, abc.w, abc.h) == where["numbers"]

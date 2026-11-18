@@ -153,7 +153,10 @@ class GazeOSApp(QObject):
         self.keyboard: KeyboardWindow | None = None
         self.onboarding: Onboarding | None = None
         self._confirm_panel: ConfirmPanel | None = None  # the open yes/no question, if any
-        self.logger = ExperimentLogger(self.profile.logs_dir) if self.settings.privacy.experiment_logging else None
+        # When the cursor was last aimed (a calibration or Fix cursor) in this run: a calibration
+        # saved in an earlier sitting does not count, so the first keyboard of a run re-aims.
+        self._last_aim_t: float | None = None
+        self.logger =ExperimentLogger(self.profile.logs_dir) if self.settings.privacy.experiment_logging else None
         self.heatmap = (HeatmapRecorder(self.geometry.width_px, self.geometry.height_px)
                         if self.settings.privacy.heatmaps else None)
         self._start_predictor_loading()
@@ -209,7 +212,7 @@ class GazeOSApp(QObject):
         self.debug = DebugView(self.intrinsics)
         self.menu = ButtonPanel("GazeOS", [
             ("Calibrate", "menu_calibrate", self.start_calibration),
-            ("Quick fix (1 point)", "menu_quick", lambda: self.start_calibration(quick=True)),
+            ("Fix cursor (1 dot)", "menu_quick", self.fix_cursor),
             ("Keyboard", "menu_keyboard", self.toggle_keyboard),
             ("Settings", "menu_settings", self._show_settings),
             ("Privacy", "menu_privacy", self._show_privacy),
@@ -333,7 +336,7 @@ class GazeOSApp(QObject):
         elif e == "zoom_open":
             self.overlay.show_toast("Zoom: look at your target again", 2)
         if self.recalibrator.drift_suspected():
-            self.overlay.show_toast("Accuracy dropped. Open the menu and choose Quick fix.", 5)
+            self.overlay.show_toast("Accuracy dropped. Look at Fix cursor (on the keyboard or in the menu).", 5)
             self.recalibrator.baseline_error_px = self.recalibrator.current_error_px()
 
     # -- actions -----------------------------------------------------------------
@@ -472,6 +475,7 @@ class GazeOSApp(QObject):
                 session, PhraseBank(self.profile.phrases_file),
                 make_speaker(self.settings.typing.tts_engine, self.settings.typing.piper_voice),
                 self.engine.error_px, self.toggle_keyboard, self.settings.theme, self.settings.typing.num_predictions,
+                on_aim=self.fix_cursor, key_repeat=self.settings.typing.key_repeat,
             )
         if self.keyboard.isVisible():
             self.keyboard.hide()
@@ -479,6 +483,22 @@ class GazeOSApp(QObject):
         else:
             self.keyboard.show()
             self.sync.track("keyboard", self.keyboard)
+            if self._aim_is_stale():
+                QTimer.singleShot(300, self.fix_cursor)  # after the press that opened the keyboard
+
+    def _aim_is_stale(self) -> bool:
+        """The cursor has not been aimed (calibration or Fix cursor) recently enough to type:
+        webcam gaze shifts with posture within minutes (settings: typing.auto_aim_after_s)."""
+        limit = self.settings.typing.auto_aim_after_s
+        if limit <= 0 or self.simulate or not self.profile.has_calibration():
+            return False
+        return self._last_aim_t is None or time.monotonic() - self._last_aim_t > limit
+
+    def fix_cursor(self) -> None:
+        """Re-aim with one dot in the centre (the quick calibration): corrects the offset the
+        cursor has drifted to since calibrating, in about 4 s, hands-free."""
+        if self.calibration is None:
+            self.start_calibration(quick=True)
 
     def _show_settings(self) -> None:
         self._settings_dialog = SettingsDialog(self.settings, self._save_settings, self.settings.theme,
@@ -553,13 +573,20 @@ class GazeOSApp(QObject):
             if outcome is not None:
                 if outcome.quick_offset is not None:
                     limit = self.geometry.deg_to_px(self.QUICK_FIX_MAX_DEG)
-                    if float(np.linalg.norm(outcome.quick_offset)) <= limit:
+                    size_px = float(np.linalg.norm(outcome.quick_offset))
+                    if size_px <= limit:
                         self.engine.drift.offset = self.engine.drift.offset + outcome.quick_offset
+                        self._last_aim_t = time.monotonic()
+                        if outcome.samples:  # "you have moved" now measures from here
+                            self.posture.set_reference(np.stack([s.obs.origin for s in outcome.samples]))
+                        cm = size_px * self.geometry.width_mm / self.geometry.width_px / 10.0
+                        self.overlay.show_toast(f"Cursor fixed (moved {cm:.1f} cm).", 3)
                     else:  # not looking at the dot, or moved too far for a one-point fix
-                        self.overlay.show_toast("Quick fix not applied: the correction it found was too large. "
+                        self.overlay.show_toast("Fix cursor not applied: the correction it found was too large. "
                                                 "If you have moved, calibrate again.", 6)
                 else:
                     self._apply_calibration(outcome)
+                    self._last_aim_t = time.monotonic()
         if self.onboarding is not None:
             v = outcome.validation if outcome is not None and outcome.quick_offset is None else None
             self.onboarding.calibration_done(v.score if v else None, v.mean_deg if v else None)
