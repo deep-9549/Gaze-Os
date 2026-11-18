@@ -931,3 +931,113 @@ def test_fix_cursor_moves_the_cursor_and_counts_as_aimed(gaze_app) -> None:
     app._calibration_done(CalibrationOutcome([sample], app.personalizer, result, quick_offset=np.array([-70.0, 140.0])))
     assert np.allclose(app.engine.drift.offset, [-70.0, 140.0]) and app._last_aim_t is not None
     assert app.posture.reference is not None and np.allclose(app.posture.reference, [0.0, 100.0, 600.0])
+
+
+# -- 18 Nov live run 2: "many false clicks"; the side bar's buttons under the keyboard pressed
+# -- instead of its keys; dwell clicks landed on the text being typed.
+
+
+def test_the_window_in_front_wins_where_targets_overlap() -> None:
+    from gazeos.control.targets import GazeTarget, TargetRegistry
+
+    reg = TargetRegistry()
+    reg.register(GazeTarget("action_bar:shortcuts:1", Rect(0, 0, 100, 50), lambda: None, "action_bar", layer=0))
+    reg.register(GazeTarget("keyboard:key_aim:2", Rect(0, 0, 150, 300), lambda: None, "keyboard", layer=10))
+    target = reg.hit(50.0, 25.0)
+    assert target is not None and target.key.startswith("keyboard:")  # not the smaller one behind it
+
+
+def test_side_bar_buttons_under_the_keyboard_are_not_targets(qtbot) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QPushButton, QWidget
+
+    from gazeos.control.targets import TargetRegistry
+    from gazeos.ui.common import MainThreadBridge, TargetSync
+
+    bar, kb = QWidget(), QWidget()
+    qtbot.addWidget(bar)
+    qtbot.addWidget(kb)
+    bar.setGeometry(600, 100, 150, 400)
+    for name, y in (("action_left", 10), ("shortcuts", 300)):  # Shortcuts ends up under the keyboard
+        b = QPushButton(name, bar)
+        b.setObjectName(name)
+        b.setGeometry(10, y, 130, 80)
+    kb.setGeometry(100, 350, 600, 300)
+    key = QPushButton("Fix cursor", kb)
+    key.setObjectName("key_aim")
+    key.setGeometry(450, 10, 140, 200)
+    bar.show()
+    kb.show()
+    reg = TargetRegistry()
+    sync = TargetSync(reg, MainThreadBridge(), interval_ms=100000)
+    sync.track("action_bar", bar)
+    sync.track("keyboard", kb)
+    names = {t.key.split(":")[1] for t in reg.all()}
+    assert "shortcuts" not in names and {"action_left", "key_aim"} <= names
+    kb.hide()  # the keyboard closes: the side bar's button is there again
+    sync.sync()
+    assert "shortcuts" in {t.key.split(":")[1] for t in reg.all()}
+
+
+def test_while_the_keyboard_is_open_looking_at_the_text_does_not_click(settings, geometry) -> None:
+    from gazeos.control.targets import GazeTarget, TargetRegistry
+
+    pressed: list[str] = []
+    reg = TargetRegistry()
+    reg.register(GazeTarget("keyboard:key_a:1", Rect(650, 450, 100, 100), lambda: pressed.append("a"), "keyboard"))
+    eng, be = _engine(settings, geometry)
+    eng.registry = reg
+
+    def look(point, seconds, t):  # type: ignore[no-untyped-def]
+        for _ in range(int(round(seconds * 30))):
+            t += 1 / 30
+            eng.update(EngineInput(t, _obs(point), OK))
+        return t
+
+    t = look((300.0, 200.0), 2.0, 0.0)  # reading the text above the keyboard
+    assert not be.of_kind("click") and pressed == []
+    t = look(POINT, 1.5, t)  # the keyboard's keys still type
+    assert pressed == ["a"]
+    settings.typing.clicks_outside_keyboard = True  # the setting brings clicks back
+    t = look((300.0, 200.0), 2.0, t)
+    assert be.of_kind("click") == [("click", "left", 1)]
+    settings.typing.clicks_outside_keyboard = False
+    reg.clear_group("keyboard")  # keyboard closed: clicks as usual
+    look((1300.0, 200.0), 2.0, t)
+    assert len(be.of_kind("click")) == 2
+
+
+def test_the_keyboard_keeps_clear_of_the_side_bar_and_asks_longer_looks(qtbot, tmp_path) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtGui import QGuiApplication
+
+    from gazeos.text_entry.layouts import get_layout
+    from gazeos.text_entry.phrases import PhraseBank
+    from gazeos.text_entry.predictor import Predictor
+    from gazeos.text_entry.session import TypingSession
+    from gazeos.text_entry.tts import SilentSpeaker
+    from gazeos.ui.keyboard import KeyboardWindow
+
+    layout = get_layout("qwerty")
+    keys = {k.id: k for k in layout.keys}
+    assert keys["aim"].y + keys["aim"].h <= keys["close"].y  # Fix cursor above Close, not under it
+    assert keys["backspace"].h == keys["space"].h == 1.5  # the bottom row is taller
+    kb = KeyboardWindow(TypingSession(layout, Predictor.default(layout, ngram_path=tmp_path / "none.json")),
+                        PhraseBank(tmp_path / "p.json"), SilentSpeaker(), 30.0, lambda: None,
+                        key_dwell_factor=1.25, keep_clear=(0, 300, 0))
+    qtbot.addWidget(kb)
+    kb.show()
+    screen = QGuiApplication.primaryScreen().availableGeometry()
+    assert kb.frameGeometry().right() <= screen.right() - 300 + 1  # the side bar's strip stays free
+    factor = {kid: float(b.property("gaze_dwell_factor") or 1.0) for kid, b in kb.key_buttons.items()}
+    assert factor["a"] == factor["backspace"] == factor["space"] == 1.25
+    assert factor["enter"] == factor["close"] == 1.5
+    assert all(float(b.property("gaze_dwell_factor")) == 1.5 for b in kb.pred_buttons)
+
+
+def test_the_app_gives_the_keyboard_the_side_bar_strip(gaze_app) -> None:
+    app = gaze_app
+    app.action_bar.show()
+    left, right, bottom = app._side_bar_strip()
+    assert app.action_bar.dock == "right" and left == bottom == 0
+    assert right >= app.action_bar.frameGeometry().width()

@@ -476,6 +476,7 @@ class GazeOSApp(QObject):
                 make_speaker(self.settings.typing.tts_engine, self.settings.typing.piper_voice),
                 self.engine.error_px, self.toggle_keyboard, self.settings.theme, self.settings.typing.num_predictions,
                 on_aim=self.fix_cursor, key_repeat=self.settings.typing.key_repeat,
+                key_dwell_factor=self.settings.typing.key_dwell_factor, keep_clear=self._side_bar_strip(),
             )
         if self.keyboard.isVisible():
             self.keyboard.hide()
@@ -485,6 +486,15 @@ class GazeOSApp(QObject):
             self.sync.track("keyboard", self.keyboard)
             if self._aim_is_stale():
                 QTimer.singleShot(300, self.fix_cursor)  # after the press that opened the keyboard
+
+    def _side_bar_strip(self) -> tuple[int, int, int]:
+        """The screen strip (left, right, bottom; logical px) the side bar takes, which the
+        keyboard keeps out of so that both stay usable."""
+        bar = self.action_bar
+        if not bar.isVisible():
+            return (0, 0, 0)
+        g = bar.frameGeometry()
+        return {"right": (0, g.width() + 8, 0), "left": (g.width() + 8, 0, 0)}.get(bar.dock, (0, 0, g.height() + 8))
 
     def _aim_is_stale(self) -> bool:
         """The cursor has not been aimed (calibration or Fix cursor) recently enough to type:

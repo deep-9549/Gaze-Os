@@ -61,6 +61,12 @@ class Layout:
         return any(len(k.letters) > 1 for k in self.keys)
 
 
+# The row of Space, Del, Enter... is this many key heights tall. It sits at the bottom of the
+# screen, where the cursor ran a key's height too high on 18 Nov 2026 (eyes lowered, webcam on
+# top): most misses there pressed the letter above instead. Taller keys absorb that.
+SPECIAL_ROW_H = 1.5
+
+
 def _special_row(y: float, width: float) -> list[Key]:
     # Space is never narrower than the other keys, and the row is scaled to the keyboard's
     # width: the alphabetical layout is only 9 keys wide, which left Space 0 wide (invisible).
@@ -71,7 +77,7 @@ def _special_row(y: float, width: float) -> list[Key]:
     scale = width / total
     keys, x = [], 0.0
     for kid, label, w in specs:
-        keys.append(Key(kid, label, x, y, w * scale, 1.0))
+        keys.append(Key(kid, label, x, y, w * scale, SPECIAL_ROW_H))
         x += w * scale
     return keys
 
@@ -84,9 +90,12 @@ def _rows_layout(name: str, rows: list[str], offsets: list[float]) -> Layout:
             label = {"'": "'", ".": ".", ",": ",", "?": "?"}.get(ch, ch.upper())
             keys.append(Key(ch, label, off + col, float(row_i), 1.0, 1.0, letters=ch))
     keys += _special_row(float(len(rows)), width)
-    keys.append(Key("close", "Close", width, 0.0, 1.0, 1.0))
-    keys.append(_aim_key(width, 1.0))
-    return Layout(name, tuple(keys), width + 1.0, float(len(rows) + 1))
+    # The right-hand column: Fix cursor on top, Close under it. The cursor tends to sit above
+    # the gaze, so a miss of Fix cursor must not land on Close (it did twice on 18 Nov), while a
+    # miss of Close lands on Fix cursor, which is harmless.
+    keys.append(_aim_key(width, 0.0))
+    keys.append(Key("close", "Close", width, 2.0, 1.0, 1.0))
+    return Layout(name, tuple(keys), width + 1.0, float(len(rows)) + SPECIAL_ROW_H)
 
 
 def _aim_key(x: float, y: float) -> Key:

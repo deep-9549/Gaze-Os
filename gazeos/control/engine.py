@@ -302,8 +302,12 @@ class ControlEngine:
             if point is not None and dwell_enabled and not self._in_scroll_zone(cursor):
                 dwell_point = self._dwell_point(cursor)
                 tgt = self._dwell_target
-                if self._modal_open() and (tgt is None or tgt.group not in self.MODAL_GROUPS):
+                groups = {t.group for t in self.registry.all()}
+                if ((groups & set(self.MODAL_GROUPS) and (tgt is None or tgt.group not in self.MODAL_GROUPS))
+                        or (tgt is None and "keyboard" in groups and not self.s.typing.clicks_outside_keyboard)):
                     # A question is on screen: nothing behind or around it is pressed or clicked.
+                    # The keyboard is open: GazeOS buttons respond, the rest of the screen (the
+                    # text being typed) is not clicked.
                     self.dwell.reset()
                     self.dwell.forget_if_left(cursor)
                     state, progress = ControlState.IDLE, 0.0
@@ -381,9 +385,6 @@ class ControlEngine:
         margin = self.px_per_deg  # within 1 degree of an edge, snap onto it
         point = magnetic_edges(point, self.geometry.width_px, self.geometry.height_px, margin)
         return point, sigma_px
-
-    def _modal_open(self) -> bool:
-        return any(t.group in self.MODAL_GROUPS for t in self.registry.all())
 
     def _dwell_point(self, cursor: FloatArray) -> FloatArray:
         """Where the dwell clicker should see the cursor. On GazeOS's own targets (keys,

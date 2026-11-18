@@ -198,6 +198,14 @@ class TypingSettings(_Section):
     # posture: on 18 Nov it was 2-4 cm off within two minutes of a good calibration, and one
     # dot removed most of it (163 -> 60 px on the keys the user marked).
     auto_aim_after_s: float = Field(120.0, ge=0.0)
+    # Dwell on a keyboard key as a multiple of the dwell time (Enter and Close take 1.5): time to
+    # see the ring start on the wrong key and look away before it presses (18 Nov: "many false
+    # clicks"). The word predictions take 1.5.
+    key_dwell_factor: float = Field(1.25, ge=1.0, le=3.0)
+    # Off: while the keyboard is open, a dwell that is on no GazeOS button clicks nothing, so
+    # reading the text being typed does not click into it and move the caret (18 Nov: about 10
+    # dwell clicks landed on the text above the keyboard). Close the keyboard to click elsewhere.
+    clicks_outside_keyboard: bool = False
 
 
 class CalibrationSettings(_Section):

@@ -10,7 +10,7 @@ from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer, Signal, S
 from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import QAbstractButton, QWidget
 
-from gazeos.control.targets import GazeTarget, TargetRegistry
+from gazeos.control.targets import GazeTarget, TargetRegistry, covered_fraction
 from gazeos.types import Rect, TrackingStatus
 
 # Colours chosen for WCAG 2.1 AA contrast (>= 4.5:1 for text) on their backgrounds.
@@ -171,12 +171,23 @@ class MainThreadBridge(QObject):
         return lambda: self.call.emit(fn)
 
 
+# Which GazeOS window is in front where two overlap (higher = in front): the side bar is behind
+# everything, the keyboard in front of it, panels in front of the keyboard, questions on top.
+TARGET_LAYERS = {"action_bar": 0, "keyboard": 10, "debug": 20, "menu": 30, "shortcuts": 30, "settings": 40,
+                 "privacy": 40, "onboarding": 40, "calibration": 50, "confirm": 60}
+DEFAULT_LAYER = 20
+# A button this much under a window in front of it is hidden: not a target.
+HIDDEN_FRACTION = 0.25
+
+
 class TargetSync(QObject):
     """Keeps the engine's target registry in sync with the visible GazeOS buttons,
     so every GazeOS screen is operable by gaze alone (PRD 7.7).
 
     Only what can be seen can be pressed: a button scrolled out of view (Settings) is no
-    target, and a window's targets go the moment it hides, not at the next sync."""
+    target, nor one under another GazeOS window in front of it (the side bar's buttons under
+    the keyboard took presses meant for its keys, 18 Nov 2026), and a window's targets go the
+    moment it hides, not at the next sync."""
 
     def __init__(self, registry: TargetRegistry, bridge: MainThreadBridge, interval_ms: int = 300) -> None:
         super().__init__()
@@ -210,10 +221,14 @@ class TargetSync(QObject):
 
     @Slot()
     def sync(self) -> None:
+        frames = {g: (TARGET_LAYERS.get(g, DEFAULT_LAYER), to_physical(w.frameGeometry(), device_ratio(w)))
+                  for g, w in self._windows.items() if w.isVisible()}
         for group, win in list(self._windows.items()):
             self.registry.clear_group(group)
             if not win.isVisible():
                 continue
+            layer = TARGET_LAYERS.get(group, DEFAULT_LAYER)
+            in_front = [r for g, (lay, r) in frames.items() if g != group and lay > layer]
             ratio = device_ratio(win)
             for i, btn in enumerate(win.findChildren(QAbstractButton)):
                 if not btn.isVisible() or not btn.isEnabled():
@@ -223,7 +238,10 @@ class TargetSync(QObject):
                     continue
                 top_left = btn.mapToGlobal(seen.topLeft())
                 rect = to_physical(QRect(top_left, seen.size()), ratio)
+                if any(covered_fraction(rect, f) > HIDDEN_FRACTION for f in in_front):
+                    continue
                 key = f"{group}:{btn.objectName() or i}:{id(btn)}"
                 self.registry.register(GazeTarget(key, rect, self.bridge.later(btn.click), group,
                                                   repeat=bool(btn.property("gaze_repeat")),
-                                                  dwell_factor=float(btn.property("gaze_dwell_factor") or 1.0)))
+                                                  dwell_factor=float(btn.property("gaze_dwell_factor") or 1.0),
+                                                  layer=layer))
