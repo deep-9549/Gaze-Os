@@ -105,8 +105,8 @@ Instead, at the user's choice:
 - Run 3: Menu could not be reached: the cursor sat 100-150 px left of the gaze at the right-hand bar (a
   calibration from another sitting). The side bar's buttons now respond from up to 2.5 degrees to their
   left (`TargetSync.reach`); run 4 pressed Menu with the cursor 95 px left of the bar.
-- Run 4: Calibrate in the menu then could not be reached (the whole cursor about 125 px off). Proposed:
-  calibrate automatically at start (not done; for the user to decide).
+- Run 4: Calibrate in the menu then could not be reached (the whole cursor about 125 px off). After run 6 the user
+  chose calibration at every start (`calibration.at_startup`, hands-free; a poor run keeps the saved one).
 - After run 4 the user asked for the head nudge back: default mode `head_fine_tune` again. Presses without
   a real nudge (under 0.3 degrees) are no longer stored, since they diluted the learned corrections.
 - Run 5 (sitting closer, about 530 app mm): "deep adatiya" typed with three corrected errors; the cursor
