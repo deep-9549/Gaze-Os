@@ -14,6 +14,7 @@ from PySide6.QtGui import QAction, QCursor, QGuiApplication, QIcon, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from gazeos.calibration.geometry import ScreenGeometry
+from gazeos.calibration.glance_aim import GlanceAim
 from gazeos.calibration.implicit import ImplicitRecalibrator
 from gazeos.calibration.personalization import Personalizer, load_personalizer, make_personalizer
 from gazeos.calibration.posture import PostureGuard
@@ -26,7 +27,7 @@ from gazeos.os_backends.keys import shortcut_keys
 from gazeos.pipeline import FrameProcessor, ProcessedFrame, ProcessingThread
 from gazeos.profiles.logs import ExperimentLogger, HeatmapRecorder
 from gazeos.profiles.store import Profile, ProfileStore
-from gazeos.settings import Settings
+from gazeos.settings import ControlMode, Settings
 from gazeos.text_entry.layouts import get_layout
 from gazeos.text_entry.phrases import PhraseBank
 from gazeos.text_entry.predictor import LocalLLM, Predictor
@@ -131,6 +132,7 @@ class GazeOSApp(QObject):
         self.bridge = MainThreadBridge()
         self.bridge.frame.connect(self._on_frame)
         self.sync = TargetSync(self.registry, self.bridge)
+        self.sync.reach = {"action_bar": self.geometry.deg_to_px(2.5)}  # side bar: reachable from a little inside
         self.samples: list[CalibrationSample] = []
         self.personalizer = self._load_personalizer()
         # Says when the user has moved away from where the calibration was made.
@@ -156,6 +158,7 @@ class GazeOSApp(QObject):
         # When the cursor was last aimed (a calibration or Fix cursor) in this run: a calibration
         # saved in an earlier sitting does not count, so the first keyboard of a run re-aims.
         self._last_aim_t: float | None = None
+        self._glance: GlanceAim | None = None  # a glance aim in progress (after a typed word)
         self.logger =ExperimentLogger(self.profile.logs_dir) if self.settings.privacy.experiment_logging else None
         self.heatmap = (HeatmapRecorder(self.geometry.width_px, self.geometry.height_px)
                         if self.settings.privacy.heatmaps else None)
@@ -233,6 +236,10 @@ class GazeOSApp(QObject):
         self._tray()
         if not self.profile.has_calibration() and not self.simulate:
             QTimer.singleShot(500, self.start_onboarding)
+        elif self.settings.calibration.at_startup and not self.simulate:
+            # A calibration from an earlier sitting is about 28 mm off (ADR 0010), and on 20 Nov it
+            # left Calibrate itself out of reach. Hands-free; a poor run keeps the saved one.
+            QTimer.singleShot(1500, self.start_calibration)
 
     def _tray(self) -> None:
         if not QSystemTrayIcon.isSystemTrayAvailable():
@@ -291,6 +298,10 @@ class GazeOSApp(QObject):
         cal = self.calibration
         if cal is not None:
             cal.add_frame(pf.result.t_capture, pf.observation, pf.engine_input.eyes_closed)
+        glance = self._glance
+        if glance is not None and pf.observation is not None and not pf.engine_input.eyes_closed:
+            glance.add(pf.result.t_capture, self.engine.drift.apply(self.personalizer.predict_px(pf.observation)),
+                       pf.observation.origin)
 
     def _frame_from_thread(self, pf: ProcessedFrame, out: EngineOutput | None, image: np.ndarray) -> None:
         self.bridge.frame.emit((pf, out, image))
@@ -477,6 +488,7 @@ class GazeOSApp(QObject):
                 self.engine.error_px, self.toggle_keyboard, self.settings.theme, self.settings.typing.num_predictions,
                 on_aim=self.fix_cursor, key_repeat=self.settings.typing.key_repeat,
                 key_dwell_factor=self.settings.typing.key_dwell_factor, keep_clear=self._side_bar_strip(),
+                on_word_end=self.glance_aim,
             )
         if self.keyboard.isVisible():
             self.keyboard.hide()
@@ -503,6 +515,42 @@ class GazeOSApp(QObject):
         if limit <= 0 or self.simulate or not self.profile.has_calibration():
             return False
         return self._last_aim_t is None or time.monotonic() - self._last_aim_t > limit
+
+    def glance_aim(self) -> None:
+        """After a typed word: a dot in the middle of the keys for about a second; the glance at
+        it re-aims the cursor (gazeos/calibration/glance_aim.py). Nothing is pressed meanwhile."""
+        if (not self.settings.typing.aim_after_word or self.calibration is not None or self._glance is not None
+                or self.keyboard is None or not self.keyboard.isVisible() or self.engine.paused
+                or not self.profile.has_calibration()):
+            return
+        x, y = self.keyboard.aim_point_px()
+        now = time.monotonic()
+        with self.worker.with_engine():
+            self.engine.release_inputs()
+            self.worker.engine_enabled = False  # the dot sits on a key: it must not be pressed
+        self._glance = GlanceAim((x, y), now, max_shift_px=self.geometry.deg_to_px(2.5),
+                                 max_spread_px=self.geometry.deg_to_px(1.9))
+        self.overlay.aim_dot = (x, y, now)
+        QTimer.singleShot(int(self._glance.duration_s * 1000) + 60, self._glance_done)
+
+    def _glance_done(self) -> None:
+        glance, self._glance = self._glance, None
+        self.overlay.aim_dot = None
+        if glance is None:
+            return
+        shift = glance.result()
+        with self.worker.with_engine():
+            if shift is not None:
+                self.engine.drift.offset = self.engine.drift.offset + shift
+                if glance.origins:
+                    self.engine.set_posture_reference(np.stack(glance.origins))
+                self._last_aim_t = time.monotonic()
+            self.engine.release_inputs()
+            self.worker.engine_enabled = self.calibration is None
+        if shift is not None:
+            log.info("glance aim: moved the cursor by (%.0f, %.0f) px", shift[0], shift[1])
+        else:
+            log.info("glance aim: no change (%s)", glance.reason)
 
     def fix_cursor(self) -> None:
         """Re-aim with one dot in the centre (the quick calibration): corrects the offset the
@@ -587,8 +635,10 @@ class GazeOSApp(QObject):
                     if size_px <= limit:
                         self.engine.drift.offset = self.engine.drift.offset + outcome.quick_offset
                         self._last_aim_t = time.monotonic()
-                        if outcome.samples:  # "you have moved" now measures from here
-                            self.posture.set_reference(np.stack([s.obs.origin for s in outcome.samples]))
+                        if outcome.samples:  # "you have moved" and the posture compensation measure from here
+                            origins = np.stack([s.obs.origin for s in outcome.samples])
+                            self.posture.set_reference(origins)
+                            self.engine.set_posture_reference(origins)
                         cm = size_px * self.geometry.width_mm / self.geometry.width_px / 10.0
                         self.overlay.show_toast(f"Cursor fixed (moved {cm:.1f} cm).", 3)
                     else:  # not looking at the dot, or moved too far for a one-point fix
@@ -601,7 +651,9 @@ class GazeOSApp(QObject):
             v = outcome.validation if outcome is not None and outcome.quick_offset is None else None
             self.onboarding.calibration_done(v.score if v else None, v.mean_deg if v else None)
         if outcome is not None and outcome.quick_offset is None:
-            self.overlay.show_toast(f"Calibration score {outcome.validation.score}/100", 4)
+            tip = (" If the cursor sits next to what you look at, keep looking at it and move your head a little "
+                   "toward it." if self.settings.mode == ControlMode.HEAD_FINE_TUNE else "")
+            self.overlay.show_toast(f"Calibration score {outcome.validation.score}/100.{tip}", 8 if tip else 4)
 
     def _apply_calibration(self, outcome: CalibrationOutcome) -> None:
         if self.gaze_model_path is not None and self.settings.gaze_model != str(self.gaze_model_path):
@@ -619,6 +671,7 @@ class GazeOSApp(QObject):
         self.recalibrator.baseline_error_px = outcome.validation.mean_px
         self.personalizer.save(self.profile.calibration_file)
         self.posture.set_reference(np.stack([s.obs.origin for s in outcome.samples]))
+        self.engine.set_posture_reference(np.stack([s.obs.origin for s in outcome.samples]))
         self.profile.save_calibration_features(
             pitchyaw=np.stack([s.obs.pitchyaw for s in outcome.samples]),
             origin=np.stack([s.obs.origin for s in outcome.samples]),

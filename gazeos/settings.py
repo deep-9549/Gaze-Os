@@ -176,7 +176,21 @@ class SystemSettings(_Section):
     start_with_os: bool = False
     show_overlay: bool = True
     auto_resume_after_face_lost: bool = True
-    head_fine_tune_gain_px_per_deg: float = 6.0
+    # Head nudge (mode "head_fine_tune", gazeos/control/head_nudge.py): the eyes place the cursor,
+    # moving the head moves it the last bit. Gain in screen widths per eye distance of nose
+    # movement; nose movements under `head_nudge_deadband` eye distances are sway and ignored.
+    # 1.5 and 0.010: a key's worth of correction is about a 2.5 degree tilt, and sway moves the
+    # cursor under a third of a key on recorded fixations (20 Nov 2026).
+    head_nudge_gain: float = Field(1.5, gt=0.0, le=5.0)
+    head_nudge_deadband: float = Field(0.010, ge=0.0, le=0.05)
+    head_nudge_max_deg: float = Field(4.0, gt=0.0)
+    head_nudge_settle_ms: float = Field(400.0, ge=0.0)
+    # The nudge starts again from zero when the gaze point moves more than this (about half a
+    # key): the head turns along with the eyes when they glide somewhere new (20 Nov run).
+    head_nudge_gaze_move_deg: float = Field(1.5, gt=0.0)
+    # While the head moves the cursor faster than this (deliberate nudging; sway stays under
+    # about 120 px/s) the dwell does not count, so a key is not pressed on the way.
+    head_nudge_hold_speed_px_s: float = Field(150.0, gt=0.0)
     confirm_destructive_shortcuts: bool = True
 
 
@@ -198,6 +212,10 @@ class TypingSettings(_Section):
     # posture: on 18 Nov it was 2-4 cm off within two minutes of a good calibration, and one
     # dot removed most of it (163 -> 60 px on the keys the user marked).
     auto_aim_after_s: float = Field(120.0, ge=0.0)
+    # After Space or a chosen prediction a dot shows in the middle of the keyboard for about a
+    # second; a glance at it re-aims the cursor (gazeos/calibration/glance_aim.py). On 20 Nov Fix
+    # cursor "felt really good for a few seconds" and then the cursor slid onto neighbouring keys.
+    aim_after_word: bool = True
     # Dwell on a keyboard key as a multiple of the dwell time (Enter and Close take 1.5): time to
     # see the ring start on the wrong key and look away before it presses (18 Nov: "many false
     # clicks"). The word predictions take 1.5.
@@ -230,6 +248,26 @@ class CalibrationSettings(_Section):
     implicit_enabled: bool = False
     implicit_refit_every: int = 20
     implicit_decay_min: float = 30.0
+    # Learn from head nudges: a nudge made before a press shows how far off the gaze was
+    # there; the correction is kept near that spot and fades over `learned_half_life_s`
+    # (gazeos/calibration/implicit.py, CorrectionField). A full calibration clears it.
+    # Calibrate (hands-free, about 20 s) every time GazeOS starts: a saved calibration is from
+    # another sitting (about 28 mm off on 20 Nov, enough to put Calibrate out of reach).
+    at_startup: bool = True
+    learn_from_nudges: bool = True
+    # Learn from corrected near misses while typing: a letter, one Del, then a neighbouring letter
+    # means the cursor sat on the first key while the user looked at the second (MistakeLearner).
+    learn_from_mistakes: bool = True
+    # Learned corrections (nudges, near misses) fade with this half-life: the offset moves within
+    # minutes (20 Nov: Fix cursor felt right for a few seconds, then the cursor slid again).
+    learned_half_life_s: float = Field(180.0, gt=0.0)
+    # Posture compensation (engine._posture): the cursor moves by these many screen mm per app mm
+    # the head has moved (gaze origin x, y) since the last aim. From 30 Fix cursor presses over
+    # four sittings on 18-20 Nov 2026 (+3.7 and -7.6 px per app mm on a 344 mm wide 1920 px screen).
+    posture_compensation: bool = True
+    posture_gain_x: float = 0.66
+    posture_gain_y: float = -1.36
+    posture_max_deg: float = Field(3.0, gt=0.0)
 
 
 class PrivacySettings(_Section):
@@ -239,7 +277,9 @@ class PrivacySettings(_Section):
 
 
 class Settings(_Section):
-    mode: ControlMode = ControlMode.EYES_ONLY
+    # Eyes place the cursor, a small head movement fine-tunes it (ADR 0010). Turned off after the
+    # second 20 Nov run ("confusing") and back on at the user's request after the fourth.
+    mode: ControlMode = ControlMode.HEAD_FINE_TUNE
     camera: CameraSettings = Field(default_factory=CameraSettings)
     screen: ScreenSettings = Field(default_factory=ScreenSettings)
     quality: QualitySettings = Field(default_factory=QualitySettings)

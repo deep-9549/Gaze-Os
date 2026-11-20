@@ -38,6 +38,8 @@ class Overlay(QWidget):
         self.out: EngineOutput | None = None
         self.show_cursor = True
         self._radius: float | None = None  # drawn cursor radius, eased
+        # Glance-aim dot: (x, y) in physical px and when it appeared (time.monotonic), or None.
+        self.aim_dot: tuple[float, float, float] | None = None
         self.banner: str | None = None
         self.toast: tuple[str, float] | None = None
         self._zoom_pixmap: QPixmap | None = None
@@ -127,6 +129,17 @@ class Overlay(QWidget):
                 rect = QRectF(c.x() - ring, c.y() - ring, 2 * ring, 2 * ring)
                 # Fills clockwise from 12 o'clock (Qt angles are 1/16 degree, counter-clockwise).
                 painter.drawArc(rect, 90 * 16, int(-360 * 16 * out.dwell_progress))
+
+        if self.aim_dot is not None:
+            x, y, shown = self.aim_dot
+            frac = min(max((time.monotonic() - shown) / 0.6, 0.0), 1.0)
+            radius = 22.0 + (7.0 - 22.0) * frac  # shrinks to draw the eye to its centre
+            c = self._p(x, y)
+            painter.setPen(QPen(color(th, "bg"), 3))
+            painter.setBrush(QBrush(color(th, "accent")))
+            painter.drawEllipse(c, radius, radius)
+            painter.setBrush(QBrush(color(th, "bg")))
+            painter.drawEllipse(c, 2.5, 2.5)
 
         self._draw_chip(painter)
         if self.banner:

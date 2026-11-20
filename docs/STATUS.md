@@ -27,7 +27,7 @@ be done without a person, data access, GPUs or approvals (see HANDOFF.md).
 | FR-15 | Fixation hold | P0 | Done | `control/fixation.py` |
 | FR-16 | Snap to clickable elements | P1 | Done, verify (needs UI Automation on Windows) | `control/snapping.py`, backends |
 | FR-17 | Zoom-click | P0 | Done | `control/zoom.py`, overlay |
-| FR-18 | Head-assisted fine adjustment | P2 | Done (basic) | engine, mode "head_fine_tune" |
+| FR-18 | Head-assisted fine adjustment | P2 | Done (default mode, ADR 0010) | `control/head_nudge.py`, mode "head_fine_tune" |
 | FR-19 | Dwell click with progress ring | P0 | Done | `control/dwell.py`, overlay |
 | FR-20 | Long-blink click | P0 | Done | `gestures/blink.py` |
 | FR-21 | Winks to left/right click | P1 | Done | `gestures/blink.py` (enable in settings) |

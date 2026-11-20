@@ -100,6 +100,9 @@ class Onboarding(QWidget):
             lab = QLabel(f"{i}. {title}: {text}")
             lab.setWordWrap(True)
             l4.addWidget(lab)
+        l4.addWidget(QLabel("Webcam gaze is close, not exact. If the cursor sits next to what you look at, keep "
+                            "your eyes on it and move your head a little toward it. If a key next to the one you "
+                            "wanted is typed, press Del and look at the right key: GazeOS learns from it."))
         l4.addWidget(QLabel("Close your eyes for 2 seconds at any time to pause or resume. Ctrl+Alt+G stops everything."))
         self.stack.addWidget(p4)
 

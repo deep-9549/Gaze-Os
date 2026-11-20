@@ -19,12 +19,20 @@ import numpy as np
 from numpy.typing import NDArray
 
 from gazeos.calibration.geometry import ScreenGeometry
-from gazeos.calibration.implicit import DriftCorrector, GazeHistory, ImplicitRecalibrator
+from gazeos.calibration.implicit import (
+    CorrectionField,
+    DriftCorrector,
+    GazeHistory,
+    ImplicitRecalibrator,
+    KeyPress,
+    MistakeLearner,
+)
 from gazeos.calibration.personalization import NoPersonalization, Personalizer
 from gazeos.calibration.protocol import GazeObservation
 from gazeos.control.dwell import DwellClicker
-from gazeos.control.filters import PointFilter, make_filter
-from gazeos.control.fixation import EyeEvent, FixationDetector
+from gazeos.control.filters import OneEuroFilter, PointFilter, make_filter
+from gazeos.control.fixation import FixationDetector
+from gazeos.control.head_nudge import HeadNudge
 from gazeos.control.mapping import magnetic_edges
 from gazeos.control.snapping import TargetSnapper
 from gazeos.control.targets import GazeTarget, TargetRegistry
@@ -56,6 +64,8 @@ class EngineInput:
     blink_event: BlinkEvent | None = None
     gesture_event: str | None = None
     eyes_closed: bool = False
+    # Nose tip x, y and the distance between the outer eye corners, image pixels (head nudge).
+    head_point: tuple[float, float, float] | None = None
 
 
 @dataclass
@@ -111,7 +121,17 @@ class ControlEngine:
         self.registry = registry or TargetRegistry()
         self.recalibrator = recalibrator
         self.confirm = confirm or (lambda _name: True)
-        self.drift = DriftCorrector()
+        self.drift = DriftCorrector(CorrectionField(geometry.width_px, half_life_s=settings.calibration.learned_half_life_s))
+        self._recent_base: list[tuple[float, FloatArray]] = []  # gaze points before the learned correction
+        self._nudge_gaze: FloatArray | None = None  # gaze point the current nudge is measured at
+        self._nudge_effective = np.zeros(2)  # how far the nudge moved the cursor (within the screen)
+        self._recent_cursor: list[tuple[float, FloatArray]] = []  # cursor over the last 0.6 s
+        self.mistakes = MistakeLearner()
+        # Posture compensation: where the head was (gaze origin x, y, app mm) at the last aim
+        # (calibration, Fix cursor, glance dot), and the smoothed head position now.
+        self.posture_ref: FloatArray | None = None
+        self._head_smooth = OneEuroFilter(0.5, 0.0, 1.0)
+        self.posture_px = np.zeros(2)  # the compensation in use, px (for the trace)
         self.history = GazeHistory()
         self.px_per_deg = geometry.deg_to_px(1.0)
         self._dwell_target: GazeTarget | None = None
@@ -134,7 +154,6 @@ class ControlEngine:
         self._corner_since: dict[str, float] = {}
         self._start_t: float | None = None
         self._last_rest_reminder = 0.0
-        self._fine_anchor: tuple[FloatArray, FloatArray] | None = None
         self.error_px = settings.dwell.radius_deg * self.px_per_deg  # updated after validation
         self.event_log: list[tuple[float, str]] = []
 
@@ -155,6 +174,11 @@ class ControlEngine:
             settings.dwell.dwell_ms, settings.dwell.radius_deg * self.px_per_deg, settings.dwell.cooldown_ms
         )
         self.snapper = TargetSnapper(settings.snap.probability_threshold, settings.snap.radius_sigmas)
+        sy = settings.system
+        self.nudge = HeadNudge(self.geometry.width_px, sy.head_nudge_max_deg * self.px_per_deg, sy.head_nudge_gain,
+                               sy.head_nudge_deadband, sy.head_nudge_settle_ms / 1000.0)
+        if self.drift.field is not None:
+            self.drift.field.half_life_s = settings.calibration.learned_half_life_s
 
     # -- public controls -------------------------------------------------------
     def apply_settings(self, settings: Settings) -> None:
@@ -176,6 +200,8 @@ class ControlEngine:
         self._frozen = None
         self._last_valid_t = None
         self._lost_run = self._lid_run = 0.0
+        self.nudge.reset()
+        self._nudge_gaze = None
 
     def set_action(self, action: Action) -> None:
         if self.dragging and action != Action.DRAG:
@@ -243,7 +269,7 @@ class ControlEngine:
         sigma_px = self.error_px
         point: FloatArray | None = None
         if inp.obs is not None and q.ok and not inp.eyes_closed:
-            point, sigma_px = self._map(inp.obs, t)
+            point, sigma_px = self._map(inp.obs, t, inp.head_point)
         if inp.eyes_closed or q.eye_closed:
             # Freeze the cursor at its pre-blink position so the blink does not move the click point.
             if self._frozen is None and self.cursor is not None:
@@ -257,6 +283,7 @@ class ControlEngine:
             self._last_valid_t = t
             self._lost_run = self._lid_run = 0.0
             self.cursor = point
+            self._recent_cursor = [(ts, p) for ts, p in self._recent_cursor if t - ts <= 0.6] + [(t, point.copy())]
         elif q.ok and not (inp.eyes_closed or q.eye_closed):
             # Face tracked, eyes open, sample dropped by the lid gate: the time counts. A gap
             # this long means the gaze could be anywhere by now (looking down at the lap):
@@ -317,10 +344,17 @@ class ControlEngine:
                             and self.dwell.state in (ControlState.FIRED, ControlState.COOLDOWN)
                             and t - self._repeat_t >= self.REPEAT_AFTER_S):
                         self.dwell.restart()  # still on the key that just fired: type it again
+                    if self._nudging():
+                        # The head is moving the cursor: the user is not there yet. A full dwell
+                        # is needed once it settles, so nothing is pressed on the way.
+                        self.dwell.reset()
                     upd = self.dwell.update(t, dwell_point)
                     state, progress = upd.state, upd.progress
                     if upd.fired and upd.anchor is not None:
+                        self._learn_nudge(t)
                         events.append(self._fire(upd.anchor, t, source="dwell"))
+                        if tgt is not None and tgt.group == "keyboard":
+                            self._learn_mistake(t, tgt)
             elif point is None:
                 state = self.dwell.state
         elif self.paused and cursor is not None and point is not None:
@@ -362,9 +396,12 @@ class ControlEngine:
         )
 
     # -- internals -------------------------------------------------------------
-    def _map(self, obs: GazeObservation, t: float) -> tuple[FloatArray, float]:
+    def _map(self, obs: GazeObservation, t: float,
+             head_point: tuple[float, float, float] | None = None) -> tuple[FloatArray, float]:
         self.history.add(t, obs)
-        raw = self.drift.apply(self.personalizer.predict_px(obs))
+        base = self.personalizer.predict_px(obs) + self.drift.offset + self._posture(t, obs)
+        self._recent_base = [(ts, p) for ts, p in self._recent_base if t - ts <= 0.6] + [(t, base)]
+        raw = base + (self.drift.field.at(base) if self.drift.field is not None else 0.0)
         sigma_px = self.personalizer.predict_sigma_px(obs) or self.error_px
         if obs.sigma is not None:
             # Network uncertainty (radians) -> pixels, combined with the calibration error.
@@ -378,10 +415,23 @@ class ControlEngine:
             # Jump at once without trailing (PRD 12.4).
             self.filter.reset()
             self.filter(t, raw, sigma_px)
-            self._fine_anchor = None
+            self.nudge.reset()
+            self._nudge_gaze = None
         point = fix.point
-        if self.s.mode == ControlMode.HEAD_FINE_TUNE and fix.event == EyeEvent.FIXATION:
-            point = self._head_fine_tune(point, obs)
+        if self.s.mode == ControlMode.HEAD_FINE_TUNE and head_point is not None:
+            # A nudge counts only while the gaze holds still. The eyes often glide to a new spot
+            # rather than jump (no saccade), and the head turns with them: on 20 Nov that turn
+            # read as a nudge, carried the cursor 190 px past the gaze and pressed Settings.
+            move_px = self.s.system.head_nudge_gaze_move_deg * self.px_per_deg
+            if self._nudge_gaze is None or float(np.linalg.norm(point - self._nudge_gaze)) > move_px:
+                self.nudge.reset()
+                self._nudge_gaze = point.copy()
+            off = self.nudge.update(t, head_point[:2], head_point[2])
+            w, h = self.geometry.width_px - 1.0, self.geometry.height_px - 1.0
+            lo, hi = np.zeros(2), np.array([w, h])
+            # The part of the nudge that moved the cursor (not the part pushed past an edge).
+            self._nudge_effective = np.clip(point + off, lo, hi) - np.clip(point, lo, hi)
+            point = point + off
         margin = self.px_per_deg  # within 1 degree of an edge, snap onto it
         point = magnetic_edges(point, self.geometry.width_px, self.geometry.height_px, margin)
         return point, sigma_px
@@ -403,16 +453,79 @@ class ControlEngine:
             return cursor
         return np.asarray(self._dwell_target.rect.center, dtype=np.float64)
 
-    def _head_fine_tune(self, point: FloatArray, obs: GazeObservation) -> FloatArray:
-        head = np.asarray(obs.head_pyr[:2], dtype=np.float64)
-        if self._fine_anchor is None:
-            self._fine_anchor = (point.copy(), head.copy())
-            return point
-        anchor_pt, anchor_head = self._fine_anchor
-        d_deg = np.degrees(head - anchor_head)
-        gain = self.s.system.head_fine_tune_gain_px_per_deg
-        # Pitch up moves the cursor up; yaw moves it horizontally (camera +x is screen -x).
-        return np.asarray(anchor_pt + np.array([d_deg[1] * gain, -d_deg[0] * gain]), dtype=np.float64)
+    def set_posture_reference(self, origins: FloatArray) -> None:
+        """The cursor was just aimed with the head at these gaze origins (N, 3 app mm): measure
+        head movement from their median from now on."""
+        o = np.asarray(origins, dtype=np.float64).reshape(-1, 3)
+        o = o[np.isfinite(o).all(axis=1)]
+        if len(o):
+            self.posture_ref = np.median(o[:, :2], axis=0)
+
+    def _posture(self, t: float, obs: GazeObservation) -> FloatArray:
+        """How far to move the cursor for the head's movement since the last aim.
+
+        On the 20 Nov runs (30 Fix cursor presses over four sittings) the cursor's error followed
+        the head: about +4 px per app-mm sideways and -5 to -19 px per app-mm vertically, the same
+        sign in every sitting. Slopes fitted on the other sittings cut each sitting's spread from
+        34-57 to 20-37 px horizontally and from 37-77 to 30-61 px vertically. It is why Fix cursor
+        "felt really good for a few seconds before getting ruined again"."""
+        h = np.asarray(self._head_smooth(t, np.asarray(obs.origin[:2], dtype=np.float64)), dtype=np.float64)
+        c = self.s.calibration
+        if self.posture_ref is None or not c.posture_compensation:
+            self.posture_px = np.zeros(2)
+            return self.posture_px
+        sx, sy = self.geometry.px_per_mm
+        d = h - self.posture_ref
+        comp = -np.array([c.posture_gain_x * d[0] * sx, c.posture_gain_y * d[1] * sy])
+        limit = self.geometry.deg_to_px(c.posture_max_deg)
+        size = float(np.linalg.norm(comp))
+        if size > limit:
+            comp *= limit / size
+        self.posture_px = comp
+        return comp
+
+    def _nudging(self) -> bool:
+        return (self.s.mode == ControlMode.HEAD_FINE_TUNE
+                and self.nudge.speed_px_s > self.s.system.head_nudge_hold_speed_px_s)
+
+    def _learn_mistake(self, t: float, target: GazeTarget) -> None:
+        """A keyboard key was pressed: a near miss corrected with Del shows where the cursor is
+        off (MistakeLearner); keep that as a local correction, like Fix cursor but by itself."""
+        field = self.drift.field
+        if (not self.s.calibration.learn_from_mistakes or field is None
+                or not self._recent_base or not self._recent_cursor):
+            return
+        parts = target.key.split(":")
+        r = target.rect
+        press = KeyPress(t, parts[1] if len(parts) > 1 else target.key, np.asarray(r.center, dtype=np.float64),
+                         float(max(r.width, r.height)),
+                         np.median(np.stack([p for _, p in self._recent_base]), axis=0),
+                         np.median(np.stack([p for _, p in self._recent_cursor]), axis=0))
+        learned = self.mistakes.on_press(press)
+        if learned is None:
+            return
+        where, corr = learned
+        field.add(t, where, field.at(where) + corr)
+        self._log(t, f"mistake_learned:{corr[0]:.0f},{corr[1]:.0f}")
+
+    def _learn_nudge(self, t: float) -> None:
+        """A dwell is about to fire: the head nudge in use shows how far off the gaze was here.
+        Keep it as a local correction and measure further nudges from here, so the next press
+        nearby needs less (or no) nudging. A press without a real nudge (under 0.3 degrees) adds
+        nothing: stored as "no correction here", such presses diluted the corrections learned from
+        mistakes to about a fifth."""
+        field = self.drift.field
+        if (self.s.mode != ControlMode.HEAD_FINE_TUNE or not self.s.calibration.learn_from_nudges
+                or field is None or self.zoom is not None or not self._recent_base):
+            return
+        where = np.median(np.stack([p for _, p in self._recent_base]), axis=0)
+        n = self._nudge_effective
+        if float(np.linalg.norm(n)) >= 0.3 * self.px_per_deg:
+            field.add(t, where, field.at(where) + n)
+            self._log(t, f"nudge_learned:{n[0]:.0f},{n[1]:.0f}")
+        self.nudge.rebase()
+        self._nudge_gaze = None
+        self._nudge_effective = np.zeros(2)
 
     def _corner_event(self, t: float, cursor: FloatArray) -> str | None:
         size = self.s.system.corner_size_px
