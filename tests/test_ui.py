@@ -295,3 +295,56 @@ def test_small_target_test_records_hits_misses_and_wrong_clicks(qtbot) -> None:
     assert (r[0]["first_click_correct"], r[0]["wrong_clicks"]) == (False, 1)
     assert r[1]["first_click_correct"] and r[1]["wrong_clicks"] == 0
     assert w.buttons[0].width() == trials[3]["size"]  # now on trial 4
+
+
+def test_keyboard_asks_for_a_glance_aim_after_each_word(qtbot, predictor) -> None:
+    """Space and a chosen prediction finish a word: the app re-aims with a glance (20 Nov)."""
+    from gazeos.ui.common import MainThreadBridge, TargetSync
+    from gazeos.ui.keyboard import KeyboardWindow
+
+    ended: list[int] = []
+    session = TypingSession(get_layout("qwerty"), predictor, emit=lambda s: None)
+    kb = KeyboardWindow(session, PhraseBank(), SilentSpeaker(), 40.0, lambda: None,
+                        on_word_end=lambda: ended.append(1))
+    qtbot.addWidget(kb)
+    kb.show()
+    reg = TargetRegistry()
+    TargetSync(reg, MainThreadBridge()).track("keyboard", kb)
+    keys = {t.key.split(":")[1]: t for t in reg.all()}
+    keys["key_h"].callback()
+    qtbot.wait(50)
+    assert ended == []  # a letter does not end a word
+    keys["key_space"].callback()
+    qtbot.waitUntil(lambda: len(ended) == 1, timeout=2000)
+    keys["key_h"].callback()
+    qtbot.waitUntil(lambda: kb.pred_buttons[0].text() != "", timeout=2000)
+    keys["pred0"].callback()
+    qtbot.waitUntil(lambda: len(ended) == 2, timeout=2000)
+    x, y = kb.aim_point_px()
+    g = kb.keys_host.mapToGlobal(kb.keys_host.rect().topLeft())
+    assert x > g.x() and y > g.y()
+
+
+def test_side_bar_buttons_reach_a_little_into_the_screen(qtbot) -> None:
+    """20 Nov: the cursor sat 100-150 px left of the gaze at the right-hand bar and Menu could
+    not be reached; its buttons now respond from a strip to their left as well."""
+    from gazeos.control.targets import TargetRegistry
+    from gazeos.ui.action_bar import ActionBar
+    from gazeos.ui.common import MainThreadBridge, TargetSync
+
+    bar = ActionBar(lambda a: None, lambda: None, lambda: None, lambda: None, lambda: None)
+    qtbot.addWidget(bar)
+    bar.show()
+    qtbot.waitExposed(bar)
+    reg, plain = TargetRegistry(), TargetRegistry()
+    TargetSync(plain, MainThreadBridge()).track("action_bar", bar)
+    sync = TargetSync(reg, MainThreadBridge())
+    sync.reach = {"action_bar": 140.0}
+    sync.track("action_bar", bar)
+    before = {t.key.split(":")[1]: t.rect for t in plain.all()}
+    after = {t.key.split(":")[1]: t.rect for t in reg.all()}
+    assert before and before.keys() == after.keys()
+    for k, r in before.items():
+        a = after[k]
+        assert a.top == r.top and a.height == r.height  # never into the button above or below
+        assert a.left == r.left - 140 and a.width == r.width + 140

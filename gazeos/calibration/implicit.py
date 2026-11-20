@@ -128,11 +128,120 @@ class ImplicitRecalibrator:
         return self.current_error_px() > 1.5 * self.baseline_error_px
 
 
-class DriftCorrector:
-    """One-point correction: an additive screen-space offset (PRD 11.6)."""
+class CorrectionField:
+    """A screen-space correction learned from head nudges: where the user moved the cursor by
+    head before a press, the gaze was that far off there.
 
-    def __init__(self) -> None:
+    Unlike labels taken from the cursor itself (ADR 0009: a press on a key only says the cursor
+    was on it, so refitting on those pulled the bottom row 9-10 mm up), a nudge is the user's own
+    correction, so it cannot reinforce the tracker's error. Webcam gaze error differs across the
+    screen and changes within minutes (20 Nov 2026 analysis), so each correction counts near
+    where it was made (Gaussian, `radius_frac` of the screen width) and fades with time
+    (`half_life_s`). `prior` acts as that many corrections of zero at every point, so one
+    nudge moves the field only part of the way and a stray one cannot move it far.
+    """
+
+    def __init__(self, screen_width_px: float, radius_frac: float = 0.25, half_life_s: float = 300.0,
+                 prior: float = 0.5, max_samples: int = 60) -> None:
+        self.sigma_px = radius_frac * screen_width_px
+        self.half_life_s = half_life_s
+        self.prior = prior
+        self.max_samples = max_samples
+        self._samples: list[tuple[float, FloatArray, FloatArray]] = []  # (t, where, correction)
+        self.now = 0.0
+
+    def __len__(self) -> int:
+        return len(self._samples)
+
+    def reset(self) -> None:
+        self._samples = []
+
+    def add(self, t: float, where_px: FloatArray, correction_px: FloatArray) -> None:
+        self.now = max(self.now, t)
+        self._samples.append((t, np.asarray(where_px, dtype=np.float64).copy(),
+                              np.asarray(correction_px, dtype=np.float64).copy()))
+        del self._samples[:-self.max_samples]
+
+    def at(self, px: FloatArray) -> FloatArray:
+        if not self._samples:
+            return np.zeros(2)
+        p = np.asarray(px, dtype=np.float64)
+        num, den = np.zeros(2), self.prior
+        for t, where, corr in self._samples:
+            w = 0.5 ** ((self.now - t) / self.half_life_s)
+            w *= math.exp(-float(np.sum((p - where) ** 2)) / (2.0 * self.sigma_px**2))
+            num += w * corr
+            den += w
+        return num / den
+
+
+@dataclass
+class KeyPress:
+    t: float
+    name: str  # "key_d", "key_backspace", ...
+    center: FloatArray  # the key's centre, screen px
+    size: float  # the key's larger side, px
+    where: FloatArray  # gaze before the learned correction during the dwell (median), px
+    cursor: FloatArray  # cursor during the dwell (median), px
+
+
+class MistakeLearner:
+    """Learns where the cursor is off from the user's own corrections while typing.
+
+    A letter pressed, deleted with one Del within `delete_within_s`, then a neighbouring letter
+    pressed within `retype_within_s`: the user was looking at the second key while the cursor
+    sat on the first. The cursor then needed to move from where it was during the first press to
+    the second key's centre. On 20 Nov 2026 Fix cursor felt right for a few seconds and then the
+    cursor slid onto neighbouring keys again; this follows the slide from the mistakes themselves.
+
+    It cannot reinforce the tracker's error the way click labels did (ADR 0009): the label is the
+    key the user chose to retype, not where the cursor was. Several Dels in a row, a key far from
+    the deleted one, or the same key again teach nothing (editing, not a near miss).
+    """
+
+    def __init__(self, delete_within_s: float = 6.0, retype_within_s: float = 8.0, max_keys_apart: float = 1.6) -> None:
+        self.delete_within_s = delete_within_s
+        self.retype_within_s = retype_within_s
+        self.max_keys_apart = max_keys_apart
+        self._last: KeyPress | None = None  # the last letter pressed
+        self._deleted: tuple[KeyPress, float] | None = None  # a letter deleted once, and when
+
+    @staticmethod
+    def is_letter(name: str) -> bool:
+        return name.startswith("key_") and len(name) == 5 and name[4].isalpha()
+
+    def on_press(self, p: KeyPress) -> tuple[FloatArray, FloatArray] | None:
+        """Feed every keyboard press in order. Returns (where, correction) when a near miss was
+        corrected: at gaze point `where` the cursor should move by `correction` px."""
+        if p.name == "key_backspace":
+            if self._deleted is not None:  # a second Del: editing, not a near miss
+                self._deleted = None
+            elif self._last is not None and p.t - self._last.t <= self.delete_within_s:
+                self._deleted = (self._last, p.t)
+            self._last = None
+            return None
+        out = None
+        if self.is_letter(p.name):
+            if self._deleted is not None:
+                wrong, t_del = self._deleted
+                apart = float(np.linalg.norm(p.center - wrong.center))
+                if (p.name != wrong.name and p.t - t_del <= self.retype_within_s
+                        and apart <= self.max_keys_apart * max(wrong.size, p.size)):
+                    out = (wrong.where.copy(), p.center - wrong.cursor)
+            self._last = p
+        else:
+            self._last = None
+        self._deleted = None
+        return out
+
+
+class DriftCorrector:
+    """One-point correction: an additive screen-space offset (PRD 11.6), plus the local
+    correction learned from head nudges (`field`)."""
+
+    def __init__(self, field: CorrectionField | None = None) -> None:
         self.offset = np.zeros(2)
+        self.field = field
 
     def fit(self, predicted_px: list[FloatArray], target_px: tuple[float, float]) -> FloatArray:
         if predicted_px:
@@ -141,7 +250,12 @@ class DriftCorrector:
         return self.offset
 
     def apply(self, px: FloatArray) -> FloatArray:
-        return np.asarray(px, dtype=np.float64) + self.offset
+        out = np.asarray(px, dtype=np.float64) + self.offset
+        if self.field is not None:
+            out = out + self.field.at(out)
+        return out
 
     def reset(self) -> None:
         self.offset = np.zeros(2)
+        if self.field is not None:
+            self.field.reset()

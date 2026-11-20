@@ -26,6 +26,7 @@ from gazeos.gestures.events import FeatureWindow, GestureEventDetector, scale_by
 from gazeos.inference.gaze import GazeEstimate, GeometricGazeEstimator
 from gazeos.settings import Settings
 from gazeos.types import FrameResult
+from gazeos.vision import face_model as fm
 from gazeos.vision import features as feat
 from gazeos.vision.enhance import mean_brightness
 from gazeos.vision.geometry import head_direction_pitchyaw, rotation_to_euler
@@ -225,8 +226,11 @@ class FrameProcessor:
         res.blink_score = blink_score
         if lid_down:  # recorded in res for analysis, but neither cursor nor calibration use it
             obs = None
+        # Nose tip and eye distance in image pixels, for the head nudge (gazeos/control/head_nudge.py).
+        head_point = (float(landmarks[fm.NOSE_TIP, 0]), float(landmarks[fm.NOSE_TIP, 1]),
+                      feat.inter_eye_distance_px(landmarks))
         inp = EngineInput(t, obs, q, blink_event=blink_event, gesture_event=gesture_event,
-                          eyes_closed=state.both_closed)
+                          eyes_closed=state.both_closed, head_point=head_point)
         return ProcessedFrame(res, inp, norm, pose, estimate, obs)
 
 
@@ -261,7 +265,8 @@ class ProcessingThread(threading.Thread):
         if os.environ.get("GAZEOS_TRACE"):
             self._trace = open(os.environ["GAZEOS_TRACE"], "w", buffering=1)  # noqa: SIM115
             self._trace.write("t,status,quality_ok,lid_down,blink,raw_x,raw_y,cal_x,cal_y,cursor_x,cursor_y,state,dwell_key,"
-                              "paused,head_x,head_y,head_z,fix_x,fix_y\n")
+                              "paused,head_x,head_y,head_z,fix_x,fix_y,nose_x,nose_y,eye_dist,nudge_x,nudge_y,"
+                              "field_x,field_y,posture_x,posture_y\n")
             self._trace_targets_t = 0.0
 
     def _write_trace(self, pf: ProcessedFrame, out: EngineOutput | None) -> None:
@@ -278,11 +283,20 @@ class ProcessingThread(threading.Thread):
         # drifted 2-4 cm within minutes of calibrating on 18 Nov, and posture is the suspect.
         head = pf.pose.gaze_origin if pf.pose is not None else (float("nan"),) * 3
         fix = eng.drift.offset if eng is not None else (float("nan"),) * 2
+        # Head nudge in use, and the correction learned from nudges at this gaze point (20 Nov).
+        hp = pf.engine_input.head_point or (float("nan"),) * 3
+        nudge = eng.nudge.offset if eng is not None else (float("nan"),) * 2
+        field = (float("nan"),) * 2
+        post = eng.posture_px if eng is not None else (float("nan"),) * 2
+        if eng is not None and eng.drift.field is not None and o is not None:
+            field = tuple(eng.drift.field.at(eng.personalizer.predict_px(o) + eng.drift.offset))
         assert self._trace is not None
         self._trace.write(f"{r.t_capture:.4f},{r.status},{int(r.quality_ok)},{int(getattr(r, 'lid_down', False))},"
                           f"{getattr(r, 'blink_score', 0.0):.3f},{raw[0]:.1f},{raw[1]:.1f},{cal[0]:.1f},{cal[1]:.1f},"
                           f"{cur[0]},{cur[1]},{out.state.value if out else ''},{key},{int(out.paused) if out else ''},"
-                          f"{head[0]:.0f},{head[1]:.0f},{head[2]:.0f},{fix[0]:.0f},{fix[1]:.0f}\n")
+                          f"{head[0]:.0f},{head[1]:.0f},{head[2]:.0f},{fix[0]:.0f},{fix[1]:.0f},"
+                          f"{hp[0]:.2f},{hp[1]:.2f},{hp[2]:.1f},{nudge[0]:.0f},{nudge[1]:.0f},"
+                          f"{field[0]:.0f},{field[1]:.0f},{post[0]:.0f},{post[1]:.0f}\n")
         if eng is not None and r.t_capture - self._trace_targets_t > 2.0:  # where GazeOS's own buttons are
             self._trace_targets_t = r.t_capture
             import json

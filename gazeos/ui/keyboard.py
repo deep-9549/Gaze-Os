@@ -40,6 +40,7 @@ class KeyboardWindow(QWidget):
         key_repeat: bool = False,
         key_dwell_factor: float = 1.0,
         keep_clear: tuple[int, int, int] = (0, 0, 0),
+        on_word_end: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(None, panel_flags())
         self.session = session
@@ -47,6 +48,7 @@ class KeyboardWindow(QWidget):
         self.speaker = speaker
         self.on_close = on_close
         self.on_aim = on_aim  # "Fix cursor": re-aim with one dot
+        self.on_word_end = on_word_end  # a word was finished (Space, a prediction): glance aim
         self.key_repeat = key_repeat  # keep looking at a key to type it again (settings: off)
         self.key_dwell_factor = key_dwell_factor  # dwell on a key, as a multiple of the user's
         # Screen strips (left, right, bottom; logical px) the keyboard stays out of: the side bar.
@@ -190,12 +192,15 @@ class KeyboardWindow(QWidget):
         if key.id == "enter":
             self.phrases.note_typed(self.session.text.strip().splitlines()[-1] if self.session.text.strip() else "")
         self._update_predictions()
+        if key.id == "space":
+            self._word_ended()
 
     def _choose(self, idx: int) -> None:
         words = self.session.suggestions.words
         if idx < len(words):
             self.session.choose(words[idx])
             self._update_predictions()
+            self._word_ended()
 
     def _choose_sentence(self) -> None:
         sentence = self.session.suggestions.sentence
@@ -204,6 +209,17 @@ class KeyboardWindow(QWidget):
             rest = sentence[len(typed):] if sentence.lower().startswith(typed.lower()) else sentence
             self.session.insert_phrase(rest)
             self._update_predictions()
+            self._word_ended()
+
+    def _word_ended(self) -> None:
+        if self.on_word_end is not None:
+            self.on_word_end()
+
+    def aim_point_px(self) -> tuple[float, float]:
+        """The middle of the keys, in physical screen pixels: where the glance-aim dot goes."""
+        ratio = device_ratio(self)
+        c = self.keys_host.mapToGlobal(self.keys_host.rect().center())
+        return (c.x() * ratio, c.y() * ratio)
 
     def _update_predictions(self) -> None:
         sugg = self.session.suggestions if self.session.suggestions.words else self.session.refresh()

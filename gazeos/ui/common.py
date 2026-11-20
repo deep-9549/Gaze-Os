@@ -194,6 +194,11 @@ class TargetSync(QObject):
         self.registry = registry
         self.bridge = bridge
         self._windows: dict[str, QWidget] = {}
+        # Windows at a screen edge whose buttons respond this many px further toward the screen's
+        # middle (physical px, by group). Webcam gaze is least accurate at the edges and the eye
+        # cannot look past the edge to pull the cursor over: on 20 Nov the cursor sat 100-150 px
+        # left of the gaze at the right-hand bar, and Menu could not be reached.
+        self.reach: dict[str, float] = {}
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.sync)
         self._timer.start(interval_ms)
@@ -240,8 +245,28 @@ class TargetSync(QObject):
                 rect = to_physical(QRect(top_left, seen.size()), ratio)
                 if any(covered_fraction(rect, f) > HIDDEN_FRACTION for f in in_front):
                     continue
+                if group in self.reach:
+                    rect = _reach_inward(rect, frames[group][1], win, self.reach[group])
                 key = f"{group}:{btn.objectName() or i}:{id(btn)}"
                 self.registry.register(GazeTarget(key, rect, self.bridge.later(btn.click), group,
                                                   repeat=bool(btn.property("gaze_repeat")),
                                                   dwell_factor=float(btn.property("gaze_dwell_factor") or 1.0),
                                                   layer=layer))
+
+
+def _reach_inward(rect: Rect, frame: Rect, window: QWidget, reach: float) -> Rect:
+    """`rect` grown by `reach` px on the side facing the screen's middle, when `frame` (the
+    window, physical px) sits at the left, right or bottom edge of its screen."""
+    screen = window.screen() or QGuiApplication.primaryScreen()
+    if screen is None or reach <= 0:
+        return rect
+    s = to_physical(screen.geometry(), device_ratio(window))
+    r = int(round(reach))
+    tol = 24
+    if frame.left + frame.width >= s.left + s.width - tol:  # docked right: grow to the left
+        return Rect(rect.left - r, rect.top, rect.width + r, rect.height)
+    if frame.left <= s.left + tol:  # docked left: grow to the right
+        return Rect(rect.left, rect.top, rect.width + r, rect.height)
+    if frame.top + frame.height >= s.top + s.height - tol:  # docked at the bottom: grow upward
+        return Rect(rect.left, rect.top - r, rect.width, rect.height + r)
+    return rect
